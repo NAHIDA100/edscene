@@ -92,13 +92,24 @@ pub fn ensure_machine_paths() -> Option<Paths> {
     None
 }
 
-/// The file both the service and the UI actually use: the machine-wide one when
-/// it already exists (an installed service owns it), otherwise the user one.
+/// The file both the service and the UI actually use: the machine-wide one as
+/// soon as an installed service owns the directory.
+///
+/// A user-side process (UI or agent) also *seeds* it: the service can read a
+/// file we create, but a file created by LocalSystem could never be edited by
+/// the settings window again, so the copy has to happen from here.
 pub fn active_paths() -> Paths {
-    if let Some(mp) = machine_paths() {
-        if mp.config.exists() || mp.override_dir.exists() {
-            return mp;
+    let Some(mp) = machine_paths() else {
+        return user_paths();
+    };
+    if !mp.config.exists() {
+        let up = user_paths();
+        if up.config.exists() {
+            if let Some(dir) = mp.config.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::copy(&up.config, &mp.config);
         }
     }
-    user_paths()
+    mp
 }

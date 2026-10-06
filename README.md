@@ -131,7 +131,7 @@ edscene --uninstall-service   Windows：停止并移除服务
 
 ```sh
 cargo build --release            # Windows
-cargo test --workspace           # 45 个纯逻辑测试，不碰操作系统
+cargo test --workspace           # 52 项：45 项纯逻辑不碰操作系统，7 项碰管道与单元
 ```
 
 中国网络下需要配 crates.io 镜像，见 [docs/dev-setup-windows.md](docs/dev-setup-windows.md)。

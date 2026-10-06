@@ -46,6 +46,16 @@ fn running_status() -> ServiceStatus {
     }
 }
 
+/// What the SCM must see when the body gives up, so failure actions fire.
+fn stopped_status() -> ServiceStatus {
+    ServiceStatus {
+        current_state: ServiceState::Stopped,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::ServiceSpecific(1),
+        ..running_status()
+    }
+}
+
 fn service_info() -> Result<ServiceInfo, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     Ok(ServiceInfo {
@@ -60,6 +70,29 @@ fn service_info() -> Result<ServiceInfo, String> {
         account_name: None,
         account_password: None,
     })
+}
+
+/// windows-service prints API failures as the useless "IO error in winapi
+/// call"; the Win32 code behind it is the only thing worth showing.
+fn werr(e: windows_service::Error) -> String {
+    match e {
+        windows_service::Error::Winapi(ref io) => match io.raw_os_error() {
+            Some(c) => format!("{io} (os error {c})"),
+            None => io.to_string(),
+        },
+        other => other.to_string(),
+    }
+}
+
+fn state_name(s: ServiceState) -> &'static str {
+    match s {
+        ServiceState::Stopped => "已停止",
+        ServiceState::Running => "运行中",
+        ServiceState::StartPending => "正在启动",
+        ServiceState::StopPending => "正在停止",
+        ServiceState::Paused => "已暂停",
+        _ => "过渡状态",
+    }
 }
 
 /// Register (or repair) the service and start it. Needs elevation; without it
@@ -83,7 +116,7 @@ pub fn install() -> Result<(), String> {
     let svc = match mgr.create_service(&info, ServiceAccess::ALL_ACCESS) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("已存在同名服务，改为更新配置（{e}）");
+            eprintln!("已存在同名服务，改为更新配置（{})", werr(e));
             mgr.open_service(SERVICE_NAME, ServiceAccess::ALL_ACCESS)
                 .map_err(|e| e.to_string())?
                 .change_config(&info)
@@ -98,13 +131,56 @@ pub fn install() -> Result<(), String> {
     // Restart rather than merely start: after an upgrade the old image is
     // still resident, and "start" on a running service is a silent no-op.
     let _ = svc.stop();
+    let mut stopped = false;
     for _ in 0..40 {
         match svc.query_status() {
-            Ok(s) if s.current_state == ServiceState::Stopped => break,
+            Ok(s) if s.current_state == ServiceState::Stopped => {
+                stopped = true;
+                break;
+            }
             _ => std::thread::sleep(Duration::from_millis(250)),
         }
     }
-    svc.start::<&str>(&[]).map_err(|e| format!("启动服务失败：{e}"))?;
+    if !stopped {
+        // A service that died without reporting its state stays "RUNNING" as far
+        // as the SCM is concerned, and no amount of asking will stop it.
+        return Err(format!(
+            "{} 的进程对停止请求毫无反应（多半是旧版假死）。\n\
+             请在管理员窗口执行 taskkill /F /IM edscene.exe，然后重跑本命令。",
+            SERVICE_NAME
+        ));
+    }
+    const ALREADY_RUNNING: i32 = 1056; // ERROR_SERVICE_ALREADY_RUNNING
+    if let Err(e) = svc.start::<&str>(&[]) {
+        // The stop above can still be in flight, and a crash-looping service is
+        // mid-restart; in both cases the SCM already considers it started.
+        let already = matches!(&e, windows_service::Error::Winapi(io)
+            if io.raw_os_error() == Some(ALREADY_RUNNING));
+        if !already {
+            return Err(format!("启动服务失败：{}", werr(e)));
+        }
+    }
+    // StartService returns before the service gets to fail, which is exactly
+    // how a broken pipe descriptor once looked like a successful install.
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(300));
+        let state = svc
+            .query_status()
+            .map(|s| s.current_state)
+            .map_err(|e| werr(e))?;
+        if state != ServiceState::Running {
+            return Err(format!(
+                "服务启动后立刻退出了（{}/{}），原因记录在 {}，改好后重跑本命令",
+                state_name(state),
+                SERVICE_NAME,
+                // Where the service itself writes, not where a plain UI run would.
+                paths::machine_paths()
+                    .unwrap_or_else(paths::active_paths)
+                    .state_dir
+                    .display()
+            ));
+        }
+    }
     println!(
         "服务已安装并启动：{SERVICE_NAME}\n开机自启已打开；卸载用 edscene --uninstall-service"
     );
@@ -253,8 +329,9 @@ extern "system" fn ffi_main(_argc: u32, _argv: *mut *mut u16) {
 }
 
 fn body() -> Result<(), String> {
-    let paths = paths::machine_paths().unwrap_or_else(paths::active_paths);
-    let cfg = load_at(&paths);
+    // LocalSystem must not fall back to *its own* profile: that is the
+    // systemprofile directory, where the settings window never looks.
+    let paths = paths::ensure_machine_paths().unwrap_or_else(paths::active_paths);
     let (sig_tx, sig_rx) = mpsc::channel::<Signal>();
     let tx = sig_tx.clone();
     let handle = service_control_handler::register(SERVICE_NAME, move |ctrl| {
@@ -274,7 +351,22 @@ fn body() -> Result<(), String> {
         .set_service_status(running_status())
         .map_err(|e| e.to_string())?;
 
+    let r = supervise(&paths, sig_rx, &sig_tx);
+    if r.is_err() {
+        // The SCM only restarts a service it saw stop. Without this report a
+        // failed start leaves a zombie that `sc query` keeps calling RUNNING.
+        let _ = handle.set_service_status(stopped_status());
+    }
+    r
+}
+
+fn supervise(
+    paths: &eds_core::Paths,
+    sig_rx: mpsc::Receiver<Signal>,
+    sig_tx: &mpsc::Sender<Signal>,
+) -> Result<(), String> {
     let server = Server::start()?;
+    let mut cfg = load_at(paths);
     let mut disp = Dispatcher::new(cfg.dispatch_config(), log::mono_ms());
     let mut seq: u64 = 0;
     let mut last_cfg = mtime(&paths.config);
@@ -293,16 +385,16 @@ fn body() -> Result<(), String> {
         let sig = match sig_rx.recv_timeout(poll) {
             Ok(s) => Some(s),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                poll_power(&sig_tx);
+                poll_power(sig_tx);
                 None
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         };
         while let Ok(more) = sig_rx.try_recv() {
-            deliver(&mut disp, &server, &cfg, more, &mut seq, &mut agents, &paths);
+            deliver(&mut disp, &server, &cfg, more, &mut seq, &mut agents, paths);
         }
         if let Some(s) = sig {
-            deliver(&mut disp, &server, &cfg, s, &mut seq, &mut agents, &paths);
+            deliver(&mut disp, &server, &cfg, s, &mut seq, &mut agents, paths);
         }
         while let Ok(ev) = server.events.try_recv() {
             match ev {
@@ -328,7 +420,11 @@ fn body() -> Result<(), String> {
             let m = mtime(&paths.config);
             if m != last_cfg {
                 last_cfg = m;
+                cfg = load_at(paths);
+                // Keep what we learned about the power state; take the new rules.
+                disp = Dispatcher::with_snapshot(cfg.dispatch_config(), log::mono_ms(), disp.snapshot());
                 poll = Duration::from_millis(cfg.runtime.power_poll_ms.max(500));
+                log::write(&paths.state_dir, &serde_json::json!({"ev": "config-reload"}));
             }
         }
     }

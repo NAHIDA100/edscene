@@ -37,9 +37,24 @@ edscene --install-service
 查看状态 / 卸载：
 
 ```powershell
-sc query edscene-broadcast
+sc.exe query edscene-broadcast
 edscene --uninstall-service
 ```
+
+（PowerShell 里必须写 `sc.exe`：裸 `sc` 是 `Set-Content` 的别名。）
+
+## 换了新版 exe 之后
+
+服务进程会锁住旧 exe，直接覆盖会报"拒绝访问"。在**管理员**窗口里按顺序：
+
+```powershell
+sc.exe config edscene-broadcast start= disabled   # 先断掉自动重启
+taskkill /F /IM edscene.exe                        # 结束服务与代理进程
+Copy-Item D:\works\edscene\target\release\edscene.exe 'C:\Program Files\edscene\edscene.exe' -Force
+& 'C:\Program Files\edscene\edscene.exe' --install-service   # 会把启动类型改回自动
+```
+
+`--install-service` 自带停-再启，不需要手工 `net start`。
 
 不想装服务也能自启：任务管理器 → 启动 → 新建一条指向
 `edscene.exe --agent` 的启动项（轻量模式，代价是登录界面上不出声）。
@@ -48,16 +63,21 @@ edscene --uninstall-service
 
 ## 文件位置
 
+没装服务时一切都在用户目录；装了服务（`%PROGRAMDATA%\edscene\` 存在）之后，
+服务、界面和每个会话里的代理共用机器级那一份：
+
 ```
-%APPDATA%\edscene\config.toml        设置
+%APPDATA%\edscene\config.toml        用户级设置（第一次装服务时被复制成下面那份）
 %PROGRAMDATA%\edscene\config.toml    装了服务之后，服务与界面共用这一份
-%APPDATA%\edscene\sounds\            你"替换"过的音频
-%APPDATA%\edscene\sounds\.disabled\  退回预设时被移走的旧替换文件（不会删）
-%LOCALAPPDATA%\edscene\events.ndjson 事件日志（原始信号 + 播报决定）
+%PROGRAMDATA%\edscene\sounds\        你"替换"过的音频
+%PROGRAMDATA%\edscene\sounds\.disabled\  退回预设时被移走的旧替换文件（不会删）
+%PROGRAMDATA%\edscene\state\events.ndjson 事件日志（原始信号 + 播报决定）
+%LOCALAPPDATA%\edscene\events.ndjson  只跑代理 / 不装服务时的日志
 ```
 
-`edscene --config-path` 会打印实际在用的路径。装了服务时以
-`%PROGRAMDATA%` 那份为准，因为服务读不到你的用户目录也正常。
+`edscene --config-path` 打印实际在用的路径。第一次以用户身份保存设置时会把
+用户级配置复制进 `%PROGRAMDATA%`（由谁创建就归谁，所以界面之后还能改），
+服务改完设置约两秒内自动生效，不用重启。
 
 ## 排查
 
@@ -67,7 +87,8 @@ edscene --uninstall-service
 | 显示 `格式不支持` | 该文件是 Opus/WMA，用 ffmpeg 转成 `.wav` 或 `.flac` 再放回素材目录 |
 | 只播一次就不播了 | 看 `events.ndjson` 里有没有 `skipped / busy`；`--simulate` 会告诉你输出流有没有被释放 |
 | 锁屏没声音 | 出厂默认"锁屏"是关的：`edscene --enable lock` |
-| 服务起不来 | `sc query edscene-broadcast`，再看 `%PROGRAMDATA%\edscene\state\events.ndjson` |
+| 服务起不来 | `sc.exe query edscene-broadcast`，再看 `%PROGRAMDATA%\edscene\state\events.ndjson` |
+| 装完没声音但服务显示 RUNNING | 老版本假死；按上面"换了新版 exe 之后"重启一次。新版会在安装结束时确认服务还活着，并在失败时打印 `os error` 编号 |
 | 想彻底重来 | `edscene --factory-reset`（只动配置和替换文件，不碰你的素材目录） |
 
 ## 关于"登录界面就出声"

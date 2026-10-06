@@ -64,8 +64,12 @@ fn sd_sddl() -> &'static widestring::U16CStr {
     static SD: std::sync::OnceLock<widestring::U16CString> = std::sync::OnceLock::new();
     SD.get_or_init(|| {
         // S-1-5-4 interactive, S-1-5-14 remote interactive; SYSTEM/admins full.
-        widestring::U16CString::from_str("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;1-5-14)")
-            .expect("SDDL is ASCII")
+        // Every non-abbreviated SID needs its `S-` prefix or the whole
+        // descriptor is rejected with ERROR_INVALID_SECURITY_DESCR.
+        widestring::U16CString::from_str(
+            "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;S-1-5-14)",
+        )
+        .expect("SDDL is ASCII")
     })
 }
 
@@ -265,6 +269,13 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// The DACL typo that once put the service in a boot-time crash loop was
+    /// only visible in an opaque "IO error in winapi call". Parse it here.
+    #[test]
+    fn the_pipe_dacl_is_valid_sddl() {
+        SecurityDescriptor::deserialize(sd_sddl()).expect("sd_sddl() 不是合法的 SDDL");
     }
 
     /// The handshake both ends agree on, exercised in-process: a process that
