@@ -6,7 +6,7 @@
 //! power, runs the dispatcher, and tells the agent living in the interactive
 //! session what to play.
 
-use super::ipc::{Cmd, Server, ServiceEvent};
+use super::ipc::{self, Cmd, Server, ServiceEvent};
 use super::launch;
 use crate::log;
 use crate::paths;
@@ -95,9 +95,16 @@ pub fn install() -> Result<(), String> {
     if let Err(e) = describe_and_harden(&svc) {
         eprintln!("（服务描述/失败重启策略未写入：{e}）");
     }
-    if let Err(e) = svc.start::<&str>(&[]) {
-        eprintln!("启动服务时：{e}（可能已经在运行）");
+    // Restart rather than merely start: after an upgrade the old image is
+    // still resident, and "start" on a running service is a silent no-op.
+    let _ = svc.stop();
+    for _ in 0..40 {
+        match svc.query_status() {
+            Ok(s) if s.current_state == ServiceState::Stopped => break,
+            _ => std::thread::sleep(Duration::from_millis(250)),
+        }
     }
+    svc.start::<&str>(&[]).map_err(|e| format!("启动服务失败：{e}"))?;
     println!(
         "服务已安装并启动：{SERVICE_NAME}\n开机自启已打开；卸载用 edscene --uninstall-service"
     );
@@ -278,7 +285,7 @@ fn body() -> Result<(), String> {
     // late start after boot), so greet the console session immediately.
     let console = console_session();
     if console != 0xFFFFFFFF {
-        let _ = launch::spawn_agent_safe(console);
+        let _ = spawn_agent_for(&server, console);
     }
     let mut agents: Vec<u32> = Vec::new();
 
@@ -308,7 +315,11 @@ fn body() -> Result<(), String> {
                         &serde_json::json!({"ev": "agent", "session": session, "pid": pid}),
                     );
                 }
-                ServiceEvent::AgentGone { session } => agents.retain(|s| *s != session),
+                ServiceEvent::AgentGone { session } => {
+                    agents.retain(|s| *s != session);
+                    // A dead agent's key must not outlive it.
+                    server.forget_session(session);
+                }
             }
         }
         // The UI writes the file; reload by timestamp, no watcher needed.
@@ -382,7 +393,7 @@ fn deliver(
     // A logon means there is now a token to launch the player with.
     if let Signal::Logon { session } = sig {
         if !agents.contains(&session) {
-            if let Err(e) = launch::spawn_agent_safe(session) {
+            if let Err(e) = spawn_agent_for(server, session) {
                 log::write(
                     &paths.state_dir,
                     &serde_json::json!({"ev": "spawn-fail", "session": session, "err": e}),
@@ -413,6 +424,14 @@ fn deliver(
             },
         ));
     }
+}
+
+/// Mint the door key, hand it to the hub, *then* launch: the agent dials in
+/// within milliseconds and must find the nonce already registered.
+fn spawn_agent_for(server: &Server, session: u32) -> Result<u32, String> {
+    let nonce = ipc::new_nonce();
+    server.expect_nonce(session, &nonce)?;
+    launch::spawn_agent_safe(session, &nonce)
 }
 
 fn console_session() -> u32 {

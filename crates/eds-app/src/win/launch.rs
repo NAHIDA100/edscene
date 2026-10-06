@@ -46,20 +46,21 @@ unsafe fn enable_tcb_privilege() {
 }
 
 /// Safe wrapper: the service calls this from a session-0 thread.
-pub fn spawn_agent_safe(session: u32) -> Result<u32, String> {
-    unsafe { spawn_agent(session) }
+pub fn spawn_agent_safe(session: u32, nonce: &str) -> Result<u32, String> {
+    unsafe { spawn_agent(session, nonce) }
 }
 
 /// Launch `edscene --agent --session <n>` inside `session`. Returns the pid.
-unsafe fn spawn_agent(session: u32) -> Result<u32, String> {
+unsafe fn spawn_agent(session: u32, nonce: &str) -> Result<u32, String> {
     enable_tcb_privilege();
     let exe = std::env::current_exe().map_err(|e| format!("找不到自身路径: {e}"))?;
     let exe_w = wide(&exe.to_string_lossy());
     let mut desktop = wide(r"winsta0\Default");
     let mut cmdline = wide(&format!(
-        "\"{}\" --agent --session {}",
+        "\"{}\" --agent --session {} --agent-nonce {}",
         exe.display(),
-        session
+        session,
+        nonce
     ));
 
     let mut user_token = HANDLE::default();

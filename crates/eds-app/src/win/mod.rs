@@ -243,7 +243,7 @@ pub fn watch(_inv: &Invocation) -> Result<(), String> {
 
 /// Started by the service with `--session <n>`: plays what the service decides,
 /// reloads the config by timestamp, and owns no OS watchers of its own.
-pub fn agent_piped(session: u32) -> Result<(), String> {
+pub fn agent_piped(session: u32, nonce: &str) -> Result<(), String> {
     let p = paths::active_paths();
     let (cfg, _) = load_config(&p)?;
     let out = std::sync::Arc::new(LocalBroadcast::new(cfg.clone(), p.clone()));
@@ -251,7 +251,7 @@ pub fn agent_piped(session: u32) -> Result<(), String> {
     let mut guard = SeqGuard::new();
     let backoff = std::time::Duration::from_secs(2);
     loop {
-        match ipc::Client::connect(session, std::process::id()) {
+        match ipc::Client::connect(session, std::process::id(), nonce) {
             Ok(mut client) => {
                 eprintln!("edscene agent: 已连接服务（会话 {session}）");
                 loop {
@@ -309,7 +309,7 @@ fn spawn_config_watch(p: eds_core::Paths, out: std::sync::Arc<LocalBroadcast>) {
 
 pub fn agent(inv: &Invocation) -> Result<(), String> {
     if let Some(session) = inv.session {
-        return agent_piped(session);
+        return agent_piped(session, inv.nonce.as_deref().unwrap_or("")); 
     }
     let p = paths::active_paths();
     let (cfg, _) = load_config(&p)?;

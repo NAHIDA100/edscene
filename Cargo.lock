@@ -1094,6 +1094,7 @@ dependencies = [
  "slint",
  "slint-build",
  "thiserror 1.0.69",
+ "widestring",
  "windows",
  "windows-service",
 ]

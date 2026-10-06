@@ -55,6 +55,7 @@ pub struct Invocation {
     pub interval_ms: u64,
     pub script: Option<PathBuf>,
     pub session: Option<u32>,
+    pub nonce: Option<String>,
     pub on: bool,
 }
 
@@ -70,6 +71,7 @@ impl Invocation {
             interval_ms: 2_500,
             script: None,
             session: None,
+            nonce: None,
             on: true,
         }
     }
@@ -131,6 +133,7 @@ fn parse_args() -> Result<Invocation, String> {
                     let v = next("--session")?;
                     inv.session = Some(v.parse().map_err(|_| "--session 要是整数".to_string())?);
                 }
+                "--agent-nonce" => inv.nonce = Some(next("--agent-nonce")?),
                 "--enable" | "--disable" => {
                     inv.cmd = "toggle".into();
                     inv.on = a == "--enable";

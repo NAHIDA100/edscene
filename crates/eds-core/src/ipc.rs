@@ -32,6 +32,10 @@ pub enum Msg {
         protocol: u32,
         pid: u32,
         session: u32,
+        /// Printed by the supervisor into the agent's command line. Any local
+        /// process can open the pipe, so this is what stops someone else's
+        /// process from registering as *this* session's player.
+        nonce: String,
     },
     /// "Broadcast this." `seq` is monotonic per supervisor so a reconnecting
     /// agent can drop anything it already played.
@@ -160,6 +164,7 @@ mod tests {
                 protocol: PROTOCOL,
                 pid: 4242,
                 session: 1,
+                nonce: "deadbeef".into(),
             },
             Msg::Event {
                 kind: EventKind::BatteryLow,

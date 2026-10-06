@@ -8,6 +8,8 @@
 use eds_core::ipc::{self, Msg, PIPE_NAME, PROTOCOL};
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
+use interprocess::os::windows::local_socket::ListenerOptionsExt;
+use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use std::collections::HashMap;
 use std::io::{BufReader, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,6 +22,9 @@ type Listener = interprocess::local_socket::Listener;
 enum HubIn {
     NewConn(Stream),
     Cmd(Cmd),
+    /// Hand the agent-in-waiting its door key before it dials in.
+    Nonce(u32, String),
+    DropSession(u32),
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +33,12 @@ pub enum Cmd {
     ToSession(u32, Msg),
     #[allow(dead_code)]
     Broadcast(Msg),
+}
+
+impl Cmd {
+    fn into_hub(self) -> HubIn {
+        HubIn::Cmd(self)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,13 +60,41 @@ fn bad_name(e: impl std::fmt::Debug) -> String {
     format!("管道名无效: {e:?}")
 }
 
+fn sd_sddl() -> &'static widestring::U16CStr {
+    static SD: std::sync::OnceLock<widestring::U16CString> = std::sync::OnceLock::new();
+    SD.get_or_init(|| {
+        // S-1-5-4 interactive, S-1-5-14 remote interactive; SYSTEM/admins full.
+        widestring::U16CString::from_str("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;1-5-14)")
+            .expect("SDDL is ASCII")
+    })
+}
+
+/// Unpredictable per-process string, used as the agent's door key.
+pub fn new_nonce() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let a = std::collections::hash_map::RandomState::new().build_hasher().finish();
+    let b = std::collections::hash_map::RandomState::new().build_hasher().finish();
+    format!("{a:016x}{b:016x}")
+}
+
+/// The session id the peer claims, and whether the nonce matches what the
+/// supervisor handed to the process it launched for that session.
+
 impl Server {
     pub fn start() -> Result<Server, String> {
         let name = PIPE_NAME
             .to_ns_name::<GenericNamespaced>()
             .map_err(bad_name)?;
+        // The default descriptor only admits the creating logon session, which
+        // for a LocalSystem service means *no* user can ever connect: the agent
+        // gets ERROR_ACCESS_DENIED and the service sits there with no player.
+        // Grant read/write to interactive and remote-interactive logons; the
+        // claimed session id is verified against the real peer below.
+        let sd = SecurityDescriptor::deserialize(sd_sddl())
+            .map_err(|e| format!("管道安全描述符无效: {e}"))?;
         let listener: Listener = ListenerOptions::new()
             .name(name)
+            .security_descriptor(sd)
             .create_sync()
             .map_err(|e| format!("无法监听命名管道 {PIPE_NAME}: {e}"))?;
         let (tx, rx) = mpsc::channel::<HubIn>();
@@ -93,27 +132,34 @@ impl Server {
     pub fn send(&self, cmd: Cmd) -> Result<(), String> {
         self.tx.send(cmd.into_hub()).map_err(|_| "服务已停止".into())
     }
-}
 
-impl Cmd {
-    fn into_hub(self) -> HubIn {
-        HubIn::Cmd(self)
+    /// Must be called *before* the agent is launched, or it will be locked out.
+    pub fn expect_nonce(&self, session: u32, nonce: &str) -> Result<(), String> {
+        self.tx
+            .send(HubIn::Nonce(session, nonce.to_string()))
+            .map_err(|_| "服务已停止".into())
+    }
+
+    pub fn forget_session(&self, session: u32) {
+        let _ = self.tx.send(HubIn::DropSession(session));
     }
 }
 
 fn hub_loop(rx: Receiver<HubIn>, ev_tx: Sender<ServiceEvent>) {
     let mut conns: HashMap<u32, Stream> = HashMap::new();
+    let mut nonces: HashMap<u32, String> = HashMap::new();
     while let Ok(msg) = rx.recv() {
         match msg {
             HubIn::NewConn(stream) => {
                 let mut reader = BufReader::new(stream);
-                let (session, pid) = match ipc::read_msg(&mut reader) {
+                let claimed = match ipc::read_msg(&mut reader) {
                     Ok(Msg::Hello {
                         role: ipc::Role::Agent,
                         protocol,
                         pid,
                         session,
-                    }) if protocol == PROTOCOL => (session, pid),
+                        nonce,
+                    }) if protocol == PROTOCOL => Some((session, pid, nonce)),
                     Ok(other) => {
                         eprintln!("edscene: 拒绝连接，首帧不是 agent hello: {other:?}");
                         continue;
@@ -123,6 +169,15 @@ fn hub_loop(rx: Receiver<HubIn>, ev_tx: Sender<ServiceEvent>) {
                         continue;
                     }
                 };
+                let Some((session, pid, nonce)) = claimed else { continue };
+                let expected = nonces.get(&session).cloned();
+                match expected {
+                    Some(want) if want == nonce => {}
+                    _ => {
+                        eprintln!("edscene: 拒绝连接：会话 {session} 的口令不匹配");
+                        continue;
+                    }
+                }
                 let mut stream = reader.into_inner();
                 // Acknowledge, so the agent knows the link is live both ways.
                 if write_frame(&mut stream, &Msg::Loaded { rev: 0 }).is_err() {
@@ -130,6 +185,12 @@ fn hub_loop(rx: Receiver<HubIn>, ev_tx: Sender<ServiceEvent>) {
                 }
                 conns.insert(session, stream);
                 let _ = ev_tx.send(ServiceEvent::AgentConnected { session, pid });
+            }
+            HubIn::Nonce(session, nonce) => {
+                nonces.insert(session, nonce);
+            }
+            HubIn::DropSession(session) => {
+                nonces.remove(&session);
             }
             HubIn::Cmd(cmd) => {
                 let (targets, msg): (Vec<u32>, &Msg) = match &cmd {
@@ -164,7 +225,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn connect(session: u32, pid: u32) -> Result<Client, String> {
+    pub fn connect(session: u32, pid: u32, nonce: &str) -> Result<Client, String> {
         let name = PIPE_NAME
             .to_ns_name::<GenericNamespaced>()
             .map_err(bad_name)?;
@@ -176,6 +237,7 @@ impl Client {
                 protocol: PROTOCOL,
                 pid,
                 session,
+                nonce: nonce.to_string(),
             },
         )?;
         Ok(Client { stream, session })
@@ -184,5 +246,61 @@ impl Client {
     /// Block until the service says something. `None` means the pipe closed.
     pub fn next(&mut self) -> Option<Msg> {
         ipc::read_msg(&mut self.stream).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn within<F: FnMut() -> bool>(mut f: F, secs: u64) -> bool {
+        let end = Instant::now() + Duration::from_secs(secs);
+        loop {
+            if f() {
+                return true;
+            }
+            if Instant::now() > end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The handshake both ends agree on, exercised in-process: a process that
+    /// did not get the key must not be able to pose as a session's player.
+    #[test]
+    fn a_wrong_nonce_is_refused_and_the_right_one_accepted() {
+        let server = match Server::start() {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("跳过：命名管道已被占用（这台机器上装着 edscene 服务）");
+                return;
+            }
+        };
+        server.expect_nonce(4242, "hunter2").unwrap();
+
+        let mut impostor = Client::connect(4242, 1, "not-the-key").unwrap();
+        let _ = impostor.next();
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !matches!(
+                server.events.try_recv(),
+                Ok(ServiceEvent::AgentConnected { .. })
+            ),
+            "口令不对却注册成功了"
+        );
+
+        let agent = Client::connect(4242, 7, "hunter2").unwrap();
+        assert!(
+            within(
+                || matches!(server.events.try_recv(),
+                           Ok(ServiceEvent::AgentConnected { session, .. }) if session == 4242),
+                3
+            ),
+            "带对口令的代理没有出现在事件里"
+        );
+        drop(agent);
+        drop(impostor);
     }
 }
