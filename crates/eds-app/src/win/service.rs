@@ -500,6 +500,10 @@ fn deliver(
     let now = log::mono_ms();
     for kind in disp.apply(sig, now) {
         if !cfg.is_enabled(kind) {
+            log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "muted", "kind": kind.id(), "t": now}),
+            );
             continue;
         }
         *seq += 1;
@@ -510,15 +514,26 @@ fn deliver(
             | Signal::ConsoleConnect { session } => session,
             _ => console_session(),
         };
-        let _ = server.send(Cmd::ToSession(
+        // The hub drops a ToSession silently when that session has no player,
+        // so say which case this was instead of leaving no trace at all.
+        let attached = agents.contains(&session);
+        let msg = Msg::Event {
+            kind,
+            seq: *seq,
             session,
-            Msg::Event {
-                kind,
-                seq: *seq,
-                session,
-                at_ms: now,
-            },
-        ));
+            at_ms: now,
+        };
+        match server.send(Cmd::ToSession(session, msg)) {
+            Ok(()) => log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "fire", "kind": kind.id(), "seq": *seq,
+                                    "session": session, "agent": attached}),
+            ),
+            Err(e) => log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "send-fail", "kind": kind.id(), "seq": *seq, "err": e}),
+            ),
+        }
     }
 }
 

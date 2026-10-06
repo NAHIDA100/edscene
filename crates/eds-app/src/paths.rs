@@ -98,18 +98,23 @@ pub fn ensure_machine_paths() -> Option<Paths> {
 /// A user-side process (UI or agent) also *seeds* it: the service can read a
 /// file we create, but a file created by LocalSystem could never be edited by
 /// the settings window again, so the copy has to happen from here.
+///
+/// The one thing a user-side process must never do is write into the machine
+/// state directory: `events.ndjson` there belongs to the service, and appending
+/// to it as a normal user fails silently. Every log we write stays per-user.
 pub fn active_paths() -> Paths {
-    let Some(mp) = machine_paths() else {
-        return user_paths();
+    let user = user_paths();
+    let Some(mut mp) = machine_paths() else {
+        return user;
     };
     if !mp.config.exists() {
-        let up = user_paths();
-        if up.config.exists() {
+        if user.config.exists() {
             if let Some(dir) = mp.config.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::copy(&up.config, &mp.config);
+            let _ = std::fs::copy(&user.config, &mp.config);
         }
     }
+    mp.state_dir = user.state_dir;
     mp
 }

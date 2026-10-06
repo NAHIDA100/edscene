@@ -71,9 +71,13 @@ Copy-Item D:\works\edscene\target\release\edscene.exe 'C:\Program Files\edscene\
 %PROGRAMDATA%\edscene\config.toml    装了服务之后，服务与界面共用这一份
 %PROGRAMDATA%\edscene\sounds\        你"替换"过的音频
 %PROGRAMDATA%\edscene\sounds\.disabled\  退回预设时被移走的旧替换文件（不会删）
-%PROGRAMDATA%\edscene\state\events.ndjson 事件日志（原始信号 + 播报决定）
-%LOCALAPPDATA%\edscene\events.ndjson  只跑代理 / 不装服务时的日志
+%PROGRAMDATA%\edscene\state\events.ndjson 服务日志：事件判定、下发、代理上线
+%LOCALAPPDATA%\edscene\events.ndjson  你自己这一份：界面与代理的播放记录
 ```
+
+两份日志分开是必须的：机器级那份由服务（LocalSystem）创建，普通用户追加不进去；
+代理是以你的身份跑的，所以它的 `play` 记录只会出现在用户级那份里。排查一次播报
+要两边都看：`fire` 在服务这份，`play` 在你这份。
 
 `edscene --config-path` 打印实际在用的路径。第一次以用户身份保存设置时会把
 用户级配置复制进 `%PROGRAMDATA%`（由谁创建就归谁，所以界面之后还能改），
