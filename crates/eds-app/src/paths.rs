@@ -52,14 +52,14 @@ pub fn user_paths() -> Paths {
     }
 }
 
-/// Machine-wide location the service prefers when it can write there. Kept
-/// separate from `user_paths` so a non-elevated UI can still run.
+/// Machine-wide location, *if it already exists*. Pure probe: a read-only
+/// question must not create `C:\ProgramData\edscene` just because somebody ran
+/// `--selftest` without elevation.
 pub fn machine_paths() -> Option<Paths> {
     #[cfg(windows)]
     {
-        let pd = env_or("PROGRAMDATA", &PathBuf::from("C:\\ProgramData"));
-        let dir = pd.join("edscene");
-        if std::fs::create_dir_all(&dir).is_ok() {
+        let dir = env_or("PROGRAMDATA", &PathBuf::from("C:\\ProgramData")).join("edscene");
+        if dir.is_dir() {
             return Some(Paths {
                 config: dir.join("config.toml"),
                 override_dir: dir.join("sounds"),
@@ -67,6 +67,26 @@ pub fn machine_paths() -> Option<Paths> {
             });
         }
         None
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+/// Create the machine-wide tree. Only the service (LocalSystem) and
+/// `--install-service` (elevated) may call this.
+pub fn ensure_machine_paths() -> Option<Paths> {
+    #[cfg(windows)]
+    {
+        let mp = machine_paths().unwrap_or_else(|| {
+            let dir = env_or("PROGRAMDATA", &PathBuf::from("C:\\ProgramData")).join("edscene");
+            Paths {
+                config: dir.join("config.toml"),
+                override_dir: dir.join("sounds"),
+                state_dir: dir.join("state"),
+            }
+        });
+        std::fs::create_dir_all(&mp.state_dir).ok()?;
+        Some(mp)
     }
     #[cfg(not(windows))]
     None

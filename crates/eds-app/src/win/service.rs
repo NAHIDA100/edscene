@@ -237,7 +237,7 @@ pub fn run() -> Result<(), String> {
 extern "system" fn ffi_main(_argc: u32, _argv: *mut *mut u16) {
     if let Err(e) = body() {
         // Nothing can show a dialog in session 0; the log is the only channel.
-        let p = paths::machine_paths().unwrap_or_else(paths::active_paths);
+        let p = paths::ensure_machine_paths().unwrap_or_else(paths::active_paths);
         log::write(
             &p.state_dir,
             &serde_json::json!({"ev": "service-exit", "err": e.to_string()}),
@@ -292,10 +292,10 @@ fn body() -> Result<(), String> {
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         };
         while let Ok(more) = sig_rx.try_recv() {
-            deliver(&mut disp, &server, &cfg, more, &mut seq, &mut agents);
+            deliver(&mut disp, &server, &cfg, more, &mut seq, &mut agents, &paths);
         }
         if let Some(s) = sig {
-            deliver(&mut disp, &server, &cfg, s, &mut seq, &mut agents);
+            deliver(&mut disp, &server, &cfg, s, &mut seq, &mut agents, &paths);
         }
         while let Ok(ev) = server.events.try_recv() {
             match ev {
@@ -377,13 +377,14 @@ fn deliver(
     sig: Signal,
     seq: &mut u64,
     agents: &mut Vec<u32>,
+    paths: &eds_core::Paths,
 ) {
     // A logon means there is now a token to launch the player with.
     if let Signal::Logon { session } = sig {
         if !agents.contains(&session) {
             if let Err(e) = launch::spawn_agent_safe(session) {
                 log::write(
-                    &crate_path(),
+                    &paths.state_dir,
                     &serde_json::json!({"ev": "spawn-fail", "session": session, "err": e}),
                 );
             }
@@ -412,12 +413,6 @@ fn deliver(
             },
         ));
     }
-}
-
-fn crate_path() -> std::path::PathBuf {
-    paths::machine_paths()
-        .map(|p| p.state_dir)
-        .unwrap_or_else(|| paths::active_paths().state_dir)
 }
 
 fn console_session() -> u32 {
