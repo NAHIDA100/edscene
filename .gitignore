@@ -1,0 +1,48 @@
+# 构建产物
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# 发行产物一律不入库（用户要求：仓库里不得出现安装包）
+/dist
+/dist-*
+*.exe
+*.msi
+*.appx
+*.deb
+*.rpm
+*.AppImage
+*.zip
+*.tar.gz
+*.sha256
+
+# 音频素材一律不入库（用户自备声音包）
+*.mp3
+*.m4a
+*.mp4
+*.aac
+*.wav
+*.wave
+*.ogg
+*.oga
+*.opus
+*.flac
+*.aif
+*.aiff
+*.wma
+/sounds
+/soundpack
+/eds
+
+# 运行期文件
+config.toml
+events.ndjson
+*.log
+*.bak
+
+# 编辑器与系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

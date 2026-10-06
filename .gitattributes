@@ -1,0 +1,13 @@
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.rs text eol=lf
+*.slint text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.service text eol=lf
+*.desktop text eol=lf
+*.yml text eol=lf

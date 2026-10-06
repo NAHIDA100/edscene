@@ -1,0 +1,36 @@
+edscene — 集成工业播报终端
+Copyright (c) 2026 edscene contributors
+
+LICENSE
+-------
+Source code ...................... MIT (see LICENSE-code)
+Skin, copy and preset names ...... CC BY-NC-ND 4.0 (see LICENSE-content)
+
+Fan-work notice
+---------------
+edscene is an unofficial, non-commercial fan project. It is not affiliated with,
+endorsed by, or connected to Hypergryph (鹰角网络), Mountain Contour or Yostar
+(悠星网络), and it uses no material belonging to them.
+
+This repository ships no game assets of any kind: no audio, no images, no fonts,
+no interface art. The eight broadcast events are identified by translated names
+only. The program is useless until a user supplies their own sound pack and
+points the app at that folder, which is why `--selftest` refuses to pass with an
+empty sound directory.
+
+Anyone asserting a right over content in this repository should open an issue;
+takedown requests are honoured without argument.
+
+Third-party components
+----------------------
+slint .............. MIT or Apache-2.0  (UI toolkit)
+rodio .............. MIT                (audio output)
+symphonia .......... MPL-2.0            (MP3 / AAC / FLAC / Vorbis decoding)
+cpal ............... Apache-2.0/MIT     (audio devices)
+zbus ............... MIT                (D-Bus, Linux)
+interprocess ....... MIT                (named pipes / unix sockets)
+windows ............ MIT or Apache-2.0  (Win32 API bindings)
+windows-service .... MIT                (Windows service control)
+toml_edit .......... MIT or Apache-2.0
+serde / serde_json . MIT or Apache-2.0
+thiserror .......... MIT or Apache-2.0

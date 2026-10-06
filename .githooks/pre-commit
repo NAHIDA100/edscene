@@ -1,0 +1,7 @@
+#!/bin/sh
+# edscene pre-commit hook: the repository must never contain audio, installers
+# or game assets. Enable with:
+#     git config core.hooksPath .githooks
+PY="$(command -v python3 || command -v python)"
+[ -n "$PY" ] || { echo "pre-commit: 找不到 python，跳过卫生检查（CI 仍会拦）" >&2; exit 0; }
+exec "$PY" "$(git rev-parse --show-toplevel)/scripts/check_repo_hygiene.py" "$@"

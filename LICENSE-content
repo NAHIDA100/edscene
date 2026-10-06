@@ -1,0 +1,38 @@
+Content licence for everything in this repository that is NOT source code.
+
+Covered by this licence
+-----------------------
+* The UI skin: layout, colour choices, the hatch tile and the window icon
+  (crates/eds-app/ui/, except the .rs files).
+* All human-readable copy: README, docs/, and every string shown by the app.
+* The preset *names* of the eight broadcast events, which are translations of
+  in-game system announcements.
+
+Licence
+-------
+This work is licensed under the Creative Commons Attribution-NonCommercial-
+NoDerivatives 4.0 International Public License (CC BY-NC-ND 4.0).
+
+You may copy and redistribute it in any medium or format, unchanged and with
+attribution, for non-commercial purposes only. You may not remix, transform or
+build upon the material for any purpose, including non-commercial ones, and you
+may not use it commercially.
+
+The full legal code is published at
+https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode
+
+Why a second licence
+--------------------
+The code is MIT so it can be freely reused, patched and embedded. The skin and
+the copy exist only because this is a fan work about a specific game, and the
+people who made that game own its identity. Keeping the two licences apart means
+a developer can take the code without ever taking a claim on the artwork, and
+nobody can strip the non-commercial guard off the parts that would embarrass the
+project if they were sold.
+
+What this licence does NOT do
+-----------------------------
+It does not grant anybody rights over Arknights: Endfield, its name, its audio,
+its fonts or its interface. Those belong to their owners. This repository
+contains none of them, and the application refuses to work until you place your
+own sound files in a folder you point it at.
