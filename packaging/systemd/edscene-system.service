@@ -1,0 +1,18 @@
+[Unit]
+Description=edscene broadcast supervisor (system-wide session/power events)
+Documentation=https://github.com/edscene/edscene
+After=systemd-user-sessions.service
+Before=display-manager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/edscene --service
+Restart=on-failure
+RestartSec=5
+# Only needed for the opt-in greeter-stage announcement, which duplicates the
+# display manager's session token. Leave unset for normal use.
+# ProtectSystem=strict
+# PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
