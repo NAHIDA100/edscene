@@ -1,0 +1,945 @@
+// edscene 设置窗口 — 按参考图还原：谷地黄强调色、半透明行带、45° 斜纹、
+// 白色胶囊控件、黄色分段标记、左下角状态文字、右下角「恢复默认」。
+import { ScrollView, Slider } from "std-widgets.slint";
+
+export struct EventRow {
+    id: string,
+    title: string,
+    hint: string,
+    enabled: bool,
+    status: string,
+    ok: bool,
+    source: string,
+    file: string,
+    container: string,
+}
+
+export global Palette {
+    in-out property <color> accent: #f5ff01;
+    in-out property <color> accent-ink: #2a2c2e;
+    out property <color> ink: #2a2c2e;
+    out property <color> ink-soft: #55565a;
+    out property <color> muted: #949494;
+    out property <color> control: #f5f5f5;
+    out property <color> band-a: #777978b2;
+    out property <color> band-b: #6f6f70b8;
+    out property <color> band-c: #635e63c0;
+    out property <color> panel: #f0545454;
+    out property <color> veil: #c2545454;
+    out property <color> focus: #35a8bb;
+    out property <color> bad: #c62b2b;
+    in-out property <length> radius: 10px;
+    in-out property <bool> rounded: true;
+    in-out property <duration> anim: 180ms;
+    in-out property <bool> hatch: true;
+}
+
+// 45° 斜纹：一张 207 字节的小图平铺，任何尺寸下都不糊。
+component Hatch inherits Rectangle {
+    in property <float> strength: 0.45;
+    clip: true;
+    Image {
+        source: @image-url("hatch.png");
+        width: 100%;
+        height: 100%;
+        horizontal-tiling: repeat;
+        vertical-tiling: repeat;
+        opacity: root.strength;
+    }
+}
+
+component Band inherits Rectangle {
+    in property <color> fill: Palette.band-a;
+    in property <float> hatch-strength: 0.45;
+    clip: true;
+    height: 54px;
+    border-radius: Palette.rounded ? Palette.radius : 0px;
+    background: root.fill;
+    Hatch {
+        visible: Palette.hatch;
+        strength: root.hatch-strength;
+    }
+}
+
+// 段落标题：黄色竖条 + 黑字，对应参考图的「主题 / 几何 / 动效」。
+component SectionLabel inherits HorizontalLayout {
+    in property <string> text;
+    in property <bool> major: false;
+    height: root.major ? 30px : 22px;
+    spacing: 10px;
+    alignment: start;
+    Rectangle {
+        horizontal-stretch: 0;
+        width: root.major ? 8px : 4px;
+        background: Palette.accent;
+        border-radius: 2px;
+    }
+    Text {
+        horizontal-stretch: 0;
+        text: root.text;
+        color: Palette.ink;
+        font-size: root.major ? 20px : 15px;
+        font-weight: root.major ? 700 : 600;
+    }
+}
+
+// 两段胶囊开关（开 / 关），白色滑块带位移动画。
+component PillSwitch inherits Rectangle {
+    in property <[string]> options: ["开", "关"];
+    in property <int> index: 0;
+    in property <bool> enabled: true;
+    callback changed(int);
+    width: 132px;
+    height: 36px;
+    border-radius: root.height / 2;
+    background: #00000026;
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.changed(Math.mod(root.index + 1, root.options.length));
+        }
+    }
+    Rectangle {
+        x: root.index * (parent.width / root.options.length);
+        width: parent.width / root.options.length;
+        height: parent.height;
+        Rectangle {
+            x: 3px;
+            y: 3px;
+            width: parent.width - 6px;
+            height: parent.height - 6px;
+            border-radius: (parent.height - 6px) / 2;
+            background: Palette.control;
+        }
+        animate x { duration: Palette.anim; }
+    }
+    for label[idx] in root.options: Text {
+        x: idx * (parent.width / root.options.length);
+        width: parent.width / root.options.length;
+        height: 100%;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: label;
+        color: idx == root.index ? Palette.ink : Palette.muted;
+        font-size: 15px;
+        font-weight: idx == root.index ? 600 : 400;
+    }
+}
+
+// 下拉胶囊：白底 + 黑色倒三角，弹出同一套白底列表 + 黄色高亮条。
+component PillSelect inherits Rectangle {
+    in property <[string]> options;
+    in property <int> index: 0;
+    in property <bool> enabled: true;
+    callback picked(int);
+    width: 200px;
+    height: 36px;
+    border-radius: root.height / 2;
+    background: Palette.control;
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            pop.show();
+        }
+    }
+    Text {
+        x: 20px;
+        width: parent.width - 54px;
+        vertical-alignment: center;
+        horizontal-alignment: left;
+        text: root.options[root.index];
+        color: Palette.ink;
+        font-size: 15px;
+        font-weight: 600;
+        overflow: elide;
+    }
+    Path {
+        x: parent.width - 32px;
+        y: 15px;
+        width: 12px;
+        height: 8px;
+        commands: "M0 0 L12 0 L6 8 Z";
+        fill: Palette.ink;
+    }
+    pop := PopupWindow {
+        Rectangle {
+            width: 230px;
+            height: root.options.length * 34px + 12px;
+            border-radius: 12px;
+            background: Palette.control;
+            border-width: 1px;
+            border-color: #00000022;
+            for option[idx] in root.options: Rectangle {
+                y: idx * 34px + 6px;
+                height: 34px;
+                width: parent.width;
+                Text {
+                    x: 20px;
+                    width: parent.width - 40px;
+                    height: 100%;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                    text: option;
+                    color: idx == root.index ? Palette.ink : Palette.ink-soft;
+                    font-weight: idx == root.index ? 700 : 400;
+                    font-size: 15px;
+                }
+                Rectangle {
+                    height: 3px;
+                    y: parent.height - 3px;
+                    width: parent.width;
+                    background: Palette.accent;
+                    visible: ta2.has-hover;
+                }
+                ta2 := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.picked(idx);
+                        pop.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
+component SmallPill inherits Rectangle {
+    in property <string> text;
+    in property <color> fill: Palette.control;
+    in property <color> ink: Palette.ink;
+    callback clicked();
+    width: t.preferred-width + 34px;
+    height: 30px;
+    border-radius: 15px;
+    background: root.fill;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    t := Text {
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.text;
+        color: root.ink;
+        font-size: 13px;
+        font-weight: 600;
+    }
+    Rectangle {
+        height: 100%;
+        width: 100%;
+        border-radius: 15px;
+        border-width: ta.has-hover ? 2px : 0px;
+        border-color: Palette.focus;
+    }
+}
+
+component CloseButton inherits Rectangle {
+    callback clicked();
+    width: 34px;
+    height: 34px;
+    border-radius: 17px;
+    background: ta.has-hover ? Palette.control : #f5f5f5e8;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    Text {
+        width: 100%;
+        height: 100%;
+        text: "×";
+        color: Palette.ink;
+        font-size: 20px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component TabCell inherits Rectangle {
+    in property <int> kind: 0;
+    in property <bool> active: false;
+    callback clicked();
+    width: 52px;
+    height: 46px;
+    border-radius: active ? 12px : 23px;
+    background: active ? Palette.accent : Palette.control;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    // 播报 = 喇叭，外观 = 滑杆，关于 = 圈 i
+    Rectangle {
+        visible: root.kind == 0;
+        x: 15px;
+        y: 16px;
+        width: 7px;
+        height: 14px;
+        background: Palette.ink;
+        border-radius: 2px;
+    }
+    Path {
+        visible: root.kind == 0;
+        x: 22px;
+        y: 13px;
+        width: 13px;
+        height: 20px;
+        commands: "M0 6 L9 0 L9 20 L0 14 Z";
+        fill: Palette.ink;
+    }
+    Rectangle {
+        visible: root.kind == 1;
+        x: 13px;
+        y: 17px;
+        width: 26px;
+        height: 2px;
+        background: Palette.ink;
+    }
+    Rectangle {
+        visible: root.kind == 1;
+        x: 13px;
+        y: 27px;
+        width: 26px;
+        height: 2px;
+        background: Palette.ink;
+    }
+    Rectangle {
+        visible: root.kind == 1;
+        x: 18px;
+        y: 12px;
+        width: 11px;
+        height: 11px;
+        border-radius: 6px;
+        background: Palette.ink;
+    }
+    Rectangle {
+        visible: root.kind == 1;
+        x: 29px;
+        y: 22px;
+        width: 11px;
+        height: 11px;
+        border-radius: 6px;
+        background: Palette.ink;
+    }
+    Rectangle {
+        visible: root.kind == 2;
+        x: 14px;
+        y: 11px;
+        width: 24px;
+        height: 24px;
+        border-radius: 12px;
+        border-width: 2px;
+        border-color: Palette.ink;
+    }
+    Text {
+        visible: root.kind == 2;
+        x: 14px;
+        y: 11px;
+        width: 24px;
+        height: 24px;
+        text: "i";
+        font-size: 15px;
+        font-weight: 700;
+        color: Palette.ink;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// 一行设置：左边标签，右边按 control 决定是下拉、开关还是音量条。
+component LookRow inherits Rectangle {
+    in property <string> label;
+    in property <string> control: "select";
+    in property <[string]> options: [];
+    in property <int> index: 0;
+    in property <string> text: "";
+    in property <float> value: 0.8;
+    callback picked(int);
+    callback changed(float);
+    height: 54px;
+    clip: true;
+    Band {
+        width: parent.width;
+        height: parent.height;
+    }
+    HorizontalLayout {
+        padding-left: 22px;
+        padding-right: 16px;
+        alignment: stretch;
+        Text {
+            text: root.label;
+            color: Palette.ink;
+            font-size: 17px;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: left;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            overflow: elide;
+        }
+        if root.control == "select" || root.control == "seg": PillSelect {
+            options: root.options;
+            index: root.index;
+            picked(i) => {
+                root.picked(i);
+            }
+        }
+        if root.control == "switch": PillSwitch {
+            options: ["开", "关"];
+            index: root.index;
+            changed(i) => {
+                root.picked(i);
+            }
+        }
+        if root.control == "volume": Rectangle {
+            width: 240px;
+            height: 36px;
+            HorizontalLayout {
+                spacing: 10px;
+                Slider {
+                    value: root.value;
+                    changed(v) => {
+                        root.changed(v);
+                    }
+                }
+                Text {
+                    text: root.text;
+                    color: Palette.ink;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    width: 46px;
+                }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "集成工业播报终端";
+    icon: @image-url("icon.png");
+    no-frame: true;
+    background: transparent;
+    forward-focus: fs;
+    default-font-size: 15px;
+    preferred-width: 1000px;
+    preferred-height: 660px;
+    min-width: 780px;
+    min-height: 540px;
+
+    // ---- 来自 Rust 的状态
+    in property <[EventRow]> rows;
+    in property <string> status-text;
+    in property <string> sounds-dir: "";
+    in-out property <int> tab: 0;
+    in property <[string]> accent-options: ["谷地黄", "武陵蓝"];
+    in property <int> accent-index: 0;
+    in property <[string]> blur-options: ["实时模糊", "壁纸副本", "纯色"];
+    in property <int> blur-index: 2;
+    in property <[string]> speed-options: ["慢", "标准", "快", "关闭"];
+    in property <int> speed-index: 1;
+    in property <[string]> deco-options: ["关闭", "轻", "标准", "重"];
+    in property <int> deco-index: 2;
+    in property <bool> top-bar-dim: true;
+    in property <bool> rounded: true;
+    in property <bool> autostart: true;
+    in property <bool> service-ready: false;
+    in property <bool> prelogon: false;
+    in property <string> volume-text: "80%";
+    in property <float> volume: 0.8;
+    in property <image> wallpaper;
+    in property <bool> has-wallpaper: false;
+    in property <string> version: "";
+    in property <string> config-path: "";
+
+    callback toggle-row(int, bool);
+    callback preview(int);
+    callback replace(int);
+    callback restore-one(int);
+    callback reset-defaults();
+    callback pick-sounds();
+    callback open-sounds-dir();
+    callback set-accent(int);
+    callback set-blur(int);
+    callback set-speed(int);
+    callback set-deco(int);
+    callback set-top-bar-dim(bool);
+    callback set-rounded(bool);
+    callback set-autostart(bool);
+    callback set-prelogon(bool);
+    callback set-volume(float);
+    callback close-window();
+
+    // ---- 背景：壁纸副本 / 实时模糊时是一张缩过的小图，否则纯色
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: Palette.rounded ? 16px : 0px;
+        clip: true;
+        Image {
+            visible: root.has-wallpaper;
+            source: root.wallpaper;
+            width: 100%;
+            height: 100%;
+        }
+        // 有壁纸时只压一层薄灰，让模糊透出来；抓不到屏幕才整面铺死灰。
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Palette.panel;
+            visible: !root.has-wallpaper;
+        }
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: Palette.veil;
+            visible: root.has-wallpaper;
+        }
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #00000059;
+            visible: root.top-bar-dim;
+        }
+    }
+
+    // ---- 无边框窗口的拖动区（Slint 内建，交给窗口系统移动）
+    WindowMoveArea {
+        width: 100%;
+        height: 64px;
+    }
+
+    Rectangle {
+        x: 26px;
+        y: 20px;
+        width: 4px;
+        height: 20px;
+        background: Palette.accent;
+        border-radius: 2px;
+    }
+    Text {
+        x: 38px;
+        y: 20px;
+        height: 20px;
+        text: "//设置";
+        color: Palette.ink;
+        font-size: 15px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+    CloseButton {
+        x: root.width - 46px;
+        y: 16px;
+        clicked => {
+            root.close-window();
+        }
+    }
+
+    HorizontalLayout {
+        x: 0px;
+        y: 10px;
+        width: 100%;
+        alignment: center;
+        spacing: 8px;
+        TabCell {
+            kind: 0;
+            active: root.tab == 0;
+            clicked => {
+                root.tab = 0;
+            }
+        }
+        TabCell {
+            kind: 1;
+            active: root.tab == 1;
+            clicked => {
+                root.tab = 1;
+            }
+        }
+        TabCell {
+            kind: 2;
+            active: root.tab == 2;
+            clicked => {
+                root.tab = 2;
+            }
+        }
+    }
+
+    // ---- 正文
+    VerticalLayout {
+        x: 26px;
+        y: 74px;
+        width: root.width - 52px;
+        height: root.height - 74px - 58px;
+        spacing: 0px;
+
+        if root.tab == 0: ScrollView {
+            content-width: root.width - 52px;
+            content-height: self.height;
+            width: 100%;
+            height: 100%;
+            VerticalLayout {
+                spacing: 18px;
+                padding-top: 6px;
+                SectionLabel {
+                    text: "播报事件";
+                    major: true;
+                }
+                for row[idx] in root.rows: Rectangle {
+                    height: 84px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        Band {
+                            height: 50px;
+                            fill: Math.mod(idx, 2) == 0 ? Palette.band-a : Palette.band-b;
+                            hatch-strength: row.enabled ? 0.85 : 0.4;
+                            HorizontalLayout {
+                                padding-left: 22px;
+                                padding-right: 16px;
+                                alignment: stretch;
+                                Text {
+                                    text: row.title;
+                                    color: Palette.ink;
+                                    font-size: 17px;
+                                    font-weight: 600;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 0;
+                                }
+                                Text {
+                                    text: row.hint;
+                                    color: row.ok ? Palette.ink-soft : Palette.bad;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    overflow: elide;
+                                }
+                                PillSwitch {
+                                    horizontal-stretch: 0;
+                                    index: row.enabled ? 0 : 1;
+                                    options: ["开", "关"];
+                                    vertical-stretch: 0;
+                                    changed(i) => {
+                                        root.toggle-row(idx, i == 0);
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            padding-left: 22px;
+                            Text {
+                                text: row.source + " · " + row.file + " · " + row.container + " · " + row.status;
+                                color: row.ok ? Palette.muted : Palette.bad;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                overflow: elide;
+                            }
+                            SmallPill {
+                                text: "试听";
+                                clicked => {
+                                    root.preview(idx);
+                                }
+                            }
+                            SmallPill {
+                                text: "替换";
+                                clicked => {
+                                    root.replace(idx);
+                                }
+                            }
+                            if row.source != "预设": SmallPill {
+                                text: "恢复";
+                                fill: #00000033;
+                                ink: Palette.ink;
+                                clicked => {
+                                    root.restore-one(idx);
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    Text {
+                        text: "素材目录";
+                        color: Palette.ink;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        height: 34px;
+                        width: 100%;
+                        border-radius: 17px;
+                        background: #00000033;
+                        Text {
+                            x: 18px;
+                            width: parent.width - 36px;
+                            vertical-alignment: center;
+                            horizontal-alignment: left;
+                            text: root.sounds-dir == "" ? "（未选择，点这里选一个装有播报音频的文件夹）" : root.sounds-dir;
+                            color: root.sounds-dir == "" ? Palette.muted : Palette.ink;
+                            font-size: 13px;
+                            overflow: elide;
+                        }
+                        sta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.pick-sounds();
+                            }
+                        }
+                    }
+                    SmallPill {
+                        text: "打开";
+                        clicked => {
+                            root.open-sounds-dir();
+                        }
+                    }
+                }
+                Rectangle { height: 8px; }
+            }
+        }
+
+        if root.tab == 1: ScrollView {
+            content-width: root.width - 52px;
+            content-height: self.height;
+            width: 100%;
+            height: 100%;
+            VerticalLayout {
+                spacing: 10px;
+                padding-top: 6px;
+                SectionLabel {
+                    text: "外观";
+                    major: true;
+                }
+                SectionLabel {
+                    text: "主题";
+                }
+                LookRow {
+                    label: "强调色";
+                    control: "select";
+                    options: root.accent-options;
+                    index: root.accent-index;
+                    picked(i) => {
+                        root.set-accent(i);
+                    }
+                }
+                LookRow {
+                    label: "顶栏压暗";
+                    control: "switch";
+                    index: root.top-bar-dim ? 0 : 1;
+                    picked(i) => {
+                        root.set-top-bar-dim(i == 0);
+                    }
+                }
+                LookRow {
+                    label: "背景模糊";
+                    control: "seg";
+                    options: root.blur-options;
+                    index: root.blur-index;
+                    picked(i) => {
+                        root.set-blur(i);
+                    }
+                }
+                SectionLabel {
+                    text: "几何";
+                }
+                LookRow {
+                    label: "圆角";
+                    control: "switch";
+                    index: root.rounded ? 0 : 1;
+                    picked(i) => {
+                        root.set-rounded(i == 0);
+                    }
+                }
+                SectionLabel {
+                    text: "动效";
+                }
+                LookRow {
+                    label: "动画速度";
+                    control: "select";
+                    options: root.speed-options;
+                    index: root.speed-index;
+                    picked(i) => {
+                        root.set-speed(i);
+                    }
+                }
+                LookRow {
+                    label: "装饰强度";
+                    control: "select";
+                    options: root.deco-options;
+                    index: root.deco-index;
+                    picked(i) => {
+                        root.set-deco(i);
+                    }
+                }
+                LookRow {
+                    label: "总音量";
+                    control: "volume";
+                    text: root.volume-text;
+                    value: root.volume;
+                    changed(v) => {
+                        root.set-volume(v);
+                    }
+                }
+                Rectangle { height: 10px; }
+            }
+        }
+
+        if root.tab == 2: ScrollView {
+            content-width: root.width - 52px;
+            content-height: self.height;
+            width: 100%;
+            height: 100%;
+            VerticalLayout {
+                spacing: 10px;
+                padding-top: 6px;
+                SectionLabel {
+                    text: "启动";
+                    major: true;
+                }
+                LookRow {
+                    label: "开机自启";
+                    control: "switch";
+                    index: root.autostart ? 0 : 1;
+                    picked(i) => {
+                        root.set-autostart(i == 0);
+                    }
+                }
+                LookRow {
+                    label: "登录界面播报";
+                    control: "switch";
+                    index: root.prelogon ? 0 : 1;
+                    picked(i) => {
+                        root.set-prelogon(i == 0);
+                    }
+                }
+                Band {
+                    height: 96px;
+                    fill: Palette.band-c;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 6px;
+                        Text {
+                            text: "开机自启 = 系统服务" + (root.service-ready ? "（已注册）" : "（未注册）");
+                            color: Palette.ink;
+                            font-size: 13px;
+                            font-weight: 600;
+                        }
+                        Text {
+                            text: "服务在输密码之前就已完成加载，事件由它统一判定；真正出声的是登录会话里的代理进程。改动需要管理员确认。";
+                            color: Palette.ink-soft;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            horizontal-alignment: left;
+                        }
+                    }
+                }
+                SectionLabel {
+                    text: "关于";
+                }
+                Band {
+                    height: 118px;
+                    fill: Palette.band-b;
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 4px;
+                        Text {
+                            text: "edscene " + root.version;
+                            color: Palette.ink;
+                            font-size: 15px;
+                            font-weight: 700;
+                        }
+                        Text {
+                            text: "明日方舟：终末地 同人二创工具，与鹰角网络 / Mountain Contour / 悠星无隶属关系，不含任何官方素材。";
+                            color: Palette.ink-soft;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            horizontal-alignment: left;
+                        }
+                        Text {
+                            text: "配置 " + root.config-path;
+                            color: Palette.muted;
+                            font-size: 11px;
+                            overflow: elide;
+                        }
+                    }
+                }
+                Rectangle { height: 10px; }
+            }
+        }
+    }
+
+    // ---- 页脚
+    Text {
+        x: 26px;
+        y: parent.height - 40px;
+        width: root.width - 220px;
+        text: root.status-text;
+        color: Palette.muted;
+        font-size: 13px;
+        vertical-alignment: center;
+        horizontal-alignment: left;
+        overflow: elide;
+    }
+    Rectangle {
+        x: root.width - 152px;
+        y: root.height - 46px;
+        width: 126px;
+        height: 34px;
+        border-radius: 17px;
+        background: Palette.control;
+            rta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.reset-defaults();
+            }
+        }
+        Text {
+            x: 18px;
+            vertical-alignment: center;
+            text: "恢复默认";
+            color: Palette.ink;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        Path {
+            x: 98px;
+            y: 9px;
+            width: 16px;
+            height: 16px;
+            commands: "M13 3 A6 6 0 1 0 15 8 M13 3 L13 0 M13 3 L10 4";
+            stroke: Palette.ink;
+            stroke-width: 2px;
+        }
+        Rectangle {
+            height: 100%;
+            width: 100%;
+            border-radius: 17px;
+            border-width: rta.has-hover ? 2px : 0px;
+            border-color: Palette.focus;
+        }
+    }
+
+    // ---- 键盘：Esc 关闭窗口
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == "\u{1b}") {
+                root.close-window();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}

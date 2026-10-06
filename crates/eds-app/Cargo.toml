@@ -1,0 +1,63 @@
+[package]
+name = "eds-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "edscene: the broadcast agent, the Windows service host and the settings UI"
+
+[[bin]]
+name = "edscene"
+path = "src/main.rs"
+
+[dependencies]
+eds-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+slint = { version = "1.18.1", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-software",
+    "software-renderer-systemfonts",
+    "system-tray",
+    "image-default-formats",
+    "compat-1-18",
+] }
+rodio = { version = "0.22.2", default-features = false, features = [
+    "playback",
+    "mp4",
+    "mp3",
+    "wav",
+    "flac",
+    "vorbis",
+    "symphonia-pcm",
+    "symphonia-aiff",
+] }
+interprocess = { version = "2.4.4", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Services",
+    "Win32_System_Power",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Environment",
+    "Win32_System_WindowsProgramming",
+    "Win32_Security",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_Com",
+    "Win32_Graphics_Gdi",
+] }
+windows-service = "0.8.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+eds-linux = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[build-dependencies]
+slint-build = "1.18.1"
