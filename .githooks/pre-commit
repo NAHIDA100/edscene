@@ -2,6 +2,11 @@
 # edscene pre-commit hook: the repository must never contain audio, installers
 # or game assets. Enable with:
 #     git config core.hooksPath .githooks
-PY="$(command -v python3 || command -v python)"
-[ -n "$PY" ] || { echo "pre-commit: 找不到 python，跳过卫生检查（CI 仍会拦）" >&2; exit 0; }
+# On Windows `python3` is often the Microsoft Store stub, which prints an
+# advert and exits non-zero. Probe each candidate by actually running it.
+PY=""
+for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
+done
+[ -n "$PY" ] || { echo "pre-commit: 找不到可用的 python，跳过卫生检查（CI 仍会拦）" >&2; exit 0; }
 exec "$PY" "$(git rev-parse --show-toplevel)/scripts/check_repo_hygiene.py" "$@"
