@@ -190,11 +190,20 @@ fn parse_event(s: &str) -> Result<EventKind, String> {
 }
 
 pub fn load_config(paths: &eds_core::Paths) -> Result<(Config, bool), String> {
-    match Config::load(&paths.config) {
-        Ok(Some(c)) => Ok((c, false)),
-        Ok(None) => Ok((Config::factory(), true)),
-        Err(e) => Err(e.to_string()),
+    let (mut cfg, fresh) = match Config::load(&paths.config) {
+        Ok(Some(c)) => (c, false),
+        Ok(None) => (Config::factory(), true),
+        Err(e) => return Err(e.to_string()),
+    };
+    // A downloaded archive already contains its sound pack; adopt it instead of
+    // starting mute and making the user point at their own folder.
+    if cfg.sounds.dir.is_empty() {
+        if let Some(dir) = paths::shipped_sounds() {
+            cfg.sounds.dir = dir.display().to_string();
+            let _ = cfg.save(&paths.config);
+        }
     }
+    Ok((cfg, fresh))
 }
 
 pub fn maybe_set_sounds_dir(inv: &Invocation, cfg: &mut Config, paths: &eds_core::Paths) -> Result<(), String> {

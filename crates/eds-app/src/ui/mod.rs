@@ -289,8 +289,38 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         }
     });
     let s = st.clone();
+    let w = weak.clone();
     win.on_drag_start(move || {
-        *s.grab.borrow_mut() = crate::platform::drag::begin();
+        let Some(win) = w.upgrade() else { return };
+        let _ = &win;
+        // Every step lands in the log, because "拖不动" has at least three
+        // different causes and the user cannot tell them apart.
+        match crate::platform::drag::begin() {
+            Ok(g) => {
+                crate::log::write(
+                    &s.paths.state_dir,
+                    &serde_json::json!({"ev": "drag", "step": "begin", "what": g.describe()}),
+                );
+                match crate::platform::drag::modal(&g) {
+                    Ok(()) => crate::log::write(
+                        &s.paths.state_dir,
+                        &serde_json::json!({"ev": "drag", "step": "modal-ok"}),
+                    ),
+                    Err(e) => {
+                        // No window manager help: move it ourselves per event.
+                        crate::log::write(
+                            &s.paths.state_dir,
+                            &serde_json::json!({"ev": "drag", "step": "modal-fail", "err": e}),
+                        );
+                        *s.grab.borrow_mut() = Some(g);
+                    }
+                }
+            }
+            Err(e) => crate::log::write(
+                &s.paths.state_dir,
+                &serde_json::json!({"ev": "drag", "step": "begin-fail", "err": e}),
+            ),
+        }
     });
     let s = st.clone();
     win.on_drag_move(move || {

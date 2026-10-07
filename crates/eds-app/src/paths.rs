@@ -92,6 +92,29 @@ pub fn ensure_machine_paths() -> Option<Paths> {
     None
 }
 
+/// Files that ship *next to the executable* in a release archive. This
+/// repository carries no audio and no artwork, so these only exist for people
+/// who downloaded a build — which is exactly why they are a default, never a
+/// requirement.
+fn exe_dir() -> Option<PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.to_path_buf())
+}
+
+/// `sounds/` beside the exe, if it is there.
+pub fn shipped_sounds() -> Option<PathBuf> {
+    let dir = exe_dir()?.join("sounds");
+    dir.is_dir().then_some(dir)
+}
+
+/// `background.jpg` / `.png` beside the exe, if it is there.
+pub fn shipped_backdrop() -> Option<PathBuf> {
+    let dir = exe_dir()?;
+    ["background.jpg", "background.jpeg", "background.png"]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.is_file())
+}
+
 /// The file both the service and the UI actually use: the machine-wide one as
 /// soon as an installed service owns the directory.
 ///

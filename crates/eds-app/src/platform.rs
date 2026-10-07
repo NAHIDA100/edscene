@@ -50,10 +50,16 @@ pub fn blurred_wallpaper() -> Option<slint::Image> {
     crate::linux::blurred_wallpaper()
 }
 
-/// The backdrop: a picture the user picked, else the desktop's own wallpaper.
+/// The backdrop, in order of preference: a picture the user picked, the one
+/// that shipped beside the exe, then the desktop's own wallpaper.
 pub fn backdrop(path: &str) -> Option<slint::Image> {
     if !path.is_empty() {
         if let Some(img) = crate::backdrop::soften_path(std::path::Path::new(path)) {
+            return Some(img);
+        }
+    }
+    if let Some(p) = crate::paths::shipped_backdrop() {
+        if let Some(img) = crate::backdrop::soften_path(&p) {
             return Some(img);
         }
     }
@@ -64,19 +70,28 @@ pub fn backdrop(path: &str) -> Option<slint::Image> {
 
 #[cfg(windows)]
 pub mod drag {
-    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetAncestor, GetCursorPos, GetWindowRect, SetWindowPos, WindowFromPoint, GA_ROOT,
-        SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        GetAncestor, GetCursorPos, GetWindowRect, SendMessageW, SetWindowPos, WindowFromPoint,
+        GA_ROOT, HTCAPTION, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_NCLBUTTONDOWN,
     };
+    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 
     /// Where the cursor grabbed the window, in physical screen pixels. Keeping
-    /// the offset in absolute coordinates is what stops the window from lagging
-    /// half a step behind the mouse.
+    /// the offset absolute is what stops the window from lagging behind the
+    /// mouse when we move it ourselves.
     pub struct Grab {
         hwnd: HWND,
         dx: i32,
         dy: i32,
+    }
+
+    impl Grab {
+        /// What we grabbed, for the log: a bare `0x…` is enough to tell a wrong
+        /// window from a failed move.
+        pub fn describe(&self) -> String {
+            format!("hwnd={:p}", self.hwnd.0)
+        }
     }
 
     fn cursor() -> Option<POINT> {
@@ -84,27 +99,39 @@ pub mod drag {
         unsafe { GetCursorPos(&mut p).ok().map(|_| p) }
     }
 
-    pub fn begin() -> Option<Grab> {
-        let p = cursor()?;
+    pub fn begin() -> Result<Grab, String> {
+        let p = cursor().ok_or("GetCursorPos 失败")?;
         let hit = unsafe { WindowFromPoint(p) };
         if hit.is_invalid() {
-            return None;
+            return Err("光标底下没有窗口".into());
         }
-        // Slint keeps hidden helper windows around; move the frame that owns
-        // them, not whatever piece of it happened to be under the cursor.
+        // Slint keeps helper windows around; move the frame that owns them.
         let hwnd = unsafe { GetAncestor(hit, GA_ROOT) };
         if hwnd.is_invalid() {
-            return None;
+            return Err("找不到顶层窗口".into());
         }
         let mut r = RECT::default();
-        unsafe { GetWindowRect(hwnd, &mut r).ok()? };
-        Some(Grab {
-            hwnd,
-            dx: p.x - r.left,
-            dy: p.y - r.top,
-        })
+        unsafe { GetWindowRect(hwnd, &mut r).map_err(|e| format!("GetWindowRect: {e}"))? };
+        Ok(Grab { hwnd, dx: p.x - r.left, dy: p.y - r.top })
     }
 
+    /// Let the window manager do the dragging: this is the classic borderless
+    /// window trick, and it is what a real title bar does, so the capture, the
+    /// thresholds and the pointer during the move are all handled by Windows.
+    pub fn modal(g: &Grab) -> Result<(), String> {
+        unsafe {
+            ReleaseCapture().map_err(|e| format!("ReleaseCapture: {e}"))?;
+            SendMessageW(
+                g.hwnd,
+                WM_NCLBUTTONDOWN,
+                Some(WPARAM(HTCAPTION as usize)),
+                Some(LPARAM(0)),
+            );
+        }
+        Ok(())
+    }
+
+    /// Fallback: move the window ourselves to wherever the cursor now is.
     pub fn apply(g: &Grab) {
         let Some(p) = cursor() else { return };
         unsafe {
@@ -123,9 +150,17 @@ pub mod drag {
 
 #[cfg(not(windows))]
 pub mod drag {
-    pub struct Grab {}
-    pub fn begin() -> Option<Grab> {
-        None
+    pub struct Grab;
+    impl Grab {
+        pub fn describe(&self) -> String {
+            "n/a".into()
+        }
+    }
+    pub fn begin() -> Result<Grab, String> {
+        Err("这个平台交给 WindowMoveArea".into())
+    }
+    pub fn modal(_: &Grab) -> Result<(), String> {
+        Err("这个平台交给 WindowMoveArea".into())
     }
     pub fn apply(_: &Grab) {}
 }
