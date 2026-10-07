@@ -45,7 +45,7 @@ impl State {
     }
 }
 
-pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
+pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
     let win = MainWindow::new().map_err(|e| format!("无法创建窗口：{e}"))?;
     let st = Rc::new(State {
         cfg: RefCell::new(cfg),
@@ -289,29 +289,70 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
         }
     });
     let s = st.clone();
-    win.on_drag_move(move |down| {
-        if !down {
-            *s.grab.borrow_mut() = None;
-            return;
-        }
-        if s.grab.borrow().is_none() {
-            *s.grab.borrow_mut() = crate::platform::drag::begin();
-        }
+    win.on_drag_start(move || {
+        *s.grab.borrow_mut() = crate::platform::drag::begin();
+    });
+    let s = st.clone();
+    win.on_drag_move(move || {
         if let Some(g) = s.grab.borrow().as_ref() {
             crate::platform::drag::apply(g);
         }
+    });
+    let s = st.clone();
+    win.on_drag_end(move || {
+        *s.grab.borrow_mut() = None;
+    });
+    // The tray is what makes "close" mean "put it away" instead of "shut it
+    // down". Desktops without a notification area just keep the old behaviour.
+    let tray = Tray::new().ok();
+    let has_tray = tray.is_some();
+    if let Some(tray) = tray.as_ref() {
+        let w = weak.clone();
+        tray.on_open(move || {
+            if let Some(win) = w.upgrade() {
+                win.show().ok();
+            }
+        });
+        let t = tray.as_weak();
+        tray.on_quit(move || {
+            // Dropping the component at the end of `show` is what unhooks the
+            // icon; the weak upgrade only keeps this closure honest.
+            if t.upgrade().is_some() {
+                slint::quit_event_loop().ok();
+            }
+        });
+    }
+    let s = st.clone();
+    let w = weak.clone();
+    win.on_set_tray(move |on| {
+        let Some(win) = w.upgrade() else { return };
+        s.cfg.borrow_mut().ui.tray = on;
+        win.set_tray_on(on);
+        s.commit(
+            &win,
+            format!(
+                "托盘常驻 → {}（{}）",
+                if on { "开" } else { "关" },
+                if on { "下次登录起服务会带上设置窗口" } else { "本次退出后不再常驻" }
+            ),
+        );
     });
     let w = weak.clone();
     win.on_close_window(move || {
         if let Some(win) = w.upgrade() {
             win.hide().ok();
         }
-        slint::quit_event_loop().ok();
+        if !has_tray {
+            slint::quit_event_loop().ok();
+        }
     });
 
-    win.show().map_err(|e| format!("无法显示窗口：{e}"))?;
+    if !hidden {
+        win.show().map_err(|e| format!("无法显示窗口：{e}"))?;
+    }
     st.apply_backdrop(&win);
     slint::run_event_loop().map_err(|e| e.to_string())?;
+    drop(tray);
     // Remember the open tab for next time.
     let tab = win.get_tab().clamp(0, 2) as u8;
     let mut cfg = st.cfg.borrow_mut();
@@ -352,6 +393,7 @@ impl State {
         win.set_rounded(cfg.ui.corner_rounded);
         win.set_autostart(cfg.runtime.autostart);
         win.set_prelogon(cfg.runtime.experimental_prelogon);
+        win.set_tray_on(cfg.ui.tray);
         win.set_sounds_dir(SharedString::from(cfg.sounds.dir.clone()));
         win.set_backdrop_name(SharedString::from(file_name(&cfg.ui.backdrop)));
         win.set_volume(cfg.volume_for_display());

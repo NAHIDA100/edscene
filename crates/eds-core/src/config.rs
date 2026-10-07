@@ -155,6 +155,9 @@ pub struct Ui {
     /// desktop is showing"; the shipped default must never be a picture file,
     /// because no artwork is allowed in this repository.
     pub backdrop: String,
+    /// Keep a settings window in the notification area, started by the service
+    /// at logon, so the GUI is one click away instead of one Explorer trip.
+    pub tray: bool,
     /// 0 关闭 … 3 重：controls the diagonal hatch and the corner radius.
     pub decoration: u8,
     /// Last opened tab, so the window comes back where you left it.
@@ -173,6 +176,7 @@ impl Default for Ui {
             include_rdp: false,
             font_file: String::new(),
             backdrop: String::new(),
+            tray: true,
             decoration: 2,
             tab: 0,
         }

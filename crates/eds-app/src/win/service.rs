@@ -72,6 +72,24 @@ fn service_info() -> Result<ServiceInfo, String> {
     })
 }
 
+/// The image to register: keep whatever the service already points at, and only
+/// fall back to this executable for a fresh install.
+///
+/// Without this, clicking "以管理员身份开启" in a settings window that happens
+/// to run from `target\release` re-points the boot-time service at a build
+/// directory that can be deleted at any moment.
+fn installed_info(mgr: &ServiceManager) -> Result<ServiceInfo, String> {
+    let mut info = service_info()?;
+    if let Ok(svc) = mgr.open_service(SERVICE_NAME, ServiceAccess::QUERY_CONFIG) {
+        if let Ok(cur) = svc.query_config() {
+            if cur.executable_path.is_file() && cur.executable_path != info.executable_path {
+                info.executable_path = cur.executable_path.clone();
+            }
+        }
+    }
+    Ok(info)
+}
+
 /// windows-service prints API failures as the useless "IO error in winapi
 /// call"; the Win32 code behind it is the only thing worth showing.
 fn werr(e: windows_service::Error) -> String {
@@ -112,7 +130,7 @@ pub fn install() -> Result<(), String> {
         ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
     )
     .map_err(|e| e.to_string())?;
-    let info = service_info()?;
+    let info = installed_info(&mgr)?;
     let svc = match mgr.create_service(&info, ServiceAccess::ALL_ACCESS) {
         Ok(s) => s,
         Err(e) => {
@@ -377,7 +395,7 @@ fn supervise(
     // late start after boot), so greet the console session immediately.
     let console = console_session();
     if console != 0xFFFFFFFF {
-        let _ = spawn_agent_for(&server, console);
+        spawn_sidecars(&server, console, &cfg, paths, "startup");
     }
     let mut agents: Vec<u32> = Vec::new();
 
@@ -489,12 +507,7 @@ fn deliver(
     // A logon means there is now a token to launch the player with.
     if let Signal::Logon { session } = sig {
         if !agents.contains(&session) {
-            if let Err(e) = spawn_agent_for(server, session) {
-                log::write(
-                    &paths.state_dir,
-                    &serde_json::json!({"ev": "spawn-fail", "session": session, "err": e}),
-                );
-            }
+            spawn_sidecars(server, session, cfg, paths, "logon");
         }
     }
     let now = log::mono_ms();
@@ -543,6 +556,32 @@ fn spawn_agent_for(server: &Server, session: u32) -> Result<u32, String> {
     let nonce = ipc::new_nonce();
     server.expect_nonce(session, &nonce)?;
     launch::spawn_agent_safe(session, &nonce)
+}
+
+/// Everything the service has to put into a freshly logged-on session: the
+/// player, and the tray window if the user wants the GUI one click away.
+/// Failures are logged, because session 0 has nowhere to print them.
+fn spawn_sidecars(
+    server: &Server,
+    session: u32,
+    cfg: &Config,
+    paths: &eds_core::Paths,
+    why: &str,
+) {
+    if let Err(e) = spawn_agent_for(server, session) {
+        log::write(
+            &paths.state_dir,
+            &serde_json::json!({"ev": "spawn-fail", "session": session, "err": e, "why": why}),
+        );
+    }
+    if cfg.ui.tray {
+        if let Err(e) = launch::spawn_tray_safe(session) {
+            log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "tray-fail", "session": session, "err": e}),
+            );
+        }
+    }
 }
 
 fn console_session() -> u32 {

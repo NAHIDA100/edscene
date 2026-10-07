@@ -36,6 +36,7 @@ const HELP: &str = r#"集成工业播报终端 edscene
   --factory-reset       所有设置回到出厂状态，替换过的素材退回 .disabled
   --config-path         打印配置与素材目录
   --service-status      Windows：查看开机自启服务的状态
+  --tray                打开设置窗口，但关到托盘时不退出（常驻托盘用）
   --version | --help
 
 选项
@@ -58,6 +59,7 @@ pub struct Invocation {
     pub session: Option<u32>,
     pub nonce: Option<String>,
     pub on: bool,
+    pub hidden: bool,
 }
 
 impl Invocation {
@@ -74,6 +76,7 @@ impl Invocation {
             session: None,
             nonce: None,
             on: true,
+            hidden: false,
         }
     }
 }
@@ -142,6 +145,7 @@ fn parse_args() -> Result<Invocation, String> {
                 }
                 "--json" => inv.json = true,
                 "--quiet" => inv.quiet = true,
+                "--hidden" | "--tray" => inv.hidden = true,
                 other => {
                     if other.starts_with('-') {
                         return Err(format!("未知参数 {other}"));
@@ -269,7 +273,7 @@ fn settings(inv: &Invocation) -> Result<(), String> {
     let paths = paths::active_paths();
     let (mut cfg, _) = load_config(&paths)?;
     maybe_set_sounds_dir(inv, &mut cfg, &paths)?;
-    ui::show(cfg, paths)
+    ui::show(cfg, paths, inv.hidden)
 }
 
 fn selftest(inv: &Invocation) -> Result<(), String> {

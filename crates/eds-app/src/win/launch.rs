@@ -47,21 +47,23 @@ unsafe fn enable_tcb_privilege() {
 
 /// Safe wrapper: the service calls this from a session-0 thread.
 pub fn spawn_agent_safe(session: u32, nonce: &str) -> Result<u32, String> {
-    unsafe { spawn_agent(session, nonce) }
+    let args = format!("--agent --session {session} --agent-nonce {nonce}");
+    unsafe { spawn_in_session(session, &args) }
 }
 
-/// Launch `edscene --agent --session <n>` inside `session`. Returns the pid.
-unsafe fn spawn_agent(session: u32, nonce: &str) -> Result<u32, String> {
+/// The settings window, living in the notification area. The service starts it
+/// next to the player so opening the GUI never means hunting for an exe.
+pub fn spawn_tray_safe(session: u32) -> Result<u32, String> {
+    unsafe { spawn_in_session(session, "--tray") }
+}
+
+/// Launch this exe with `args` inside `session`, on the interactive desktop.
+unsafe fn spawn_in_session(session: u32, args: &str) -> Result<u32, String> {
     enable_tcb_privilege();
     let exe = std::env::current_exe().map_err(|e| format!("找不到自身路径: {e}"))?;
     let exe_w = wide(&exe.to_string_lossy());
     let mut desktop = wide(r"winsta0\Default");
-    let mut cmdline = wide(&format!(
-        "\"{}\" --agent --session {} --agent-nonce {}",
-        exe.display(),
-        session,
-        nonce
-    ));
+    let mut cmdline = wide(&format!("\"{}\" {}", exe.display(), args));
 
     let mut user_token = HANDLE::default();
     WTSQueryUserToken(session, &mut user_token)

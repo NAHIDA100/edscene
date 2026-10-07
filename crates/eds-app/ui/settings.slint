@@ -18,14 +18,19 @@ export global Palette {
     in-out property <color> accent: #f5ff01;
     in-out property <color> accent-ink: #2a2c2e;
     out property <color> ink: #2a2c2e;
-    out property <color> ink-soft: #55565a;
-    out property <color> muted: #949494;
+    out property <color> ink-soft: #33353a;
+    out property <color> muted: #55575c;
     out property <color> control: #f5f5f5;
-    out property <color> band-a: #777978b2;
-    out property <color> band-b: #6f6f70b8;
-    out property <color> band-c: #635e63c0;
-    out property <color> panel: #f0545454;
-    out property <color> veil: #c2545454;
+    // Light enough that the secondary text stays legible on top of them, and
+    // nearly opaque so the wallpaper stops eating the edges of the glyphs.
+    out property <color> band-a: #8e908fe6;
+    out property <color> band-b: #878889ea;
+    out property <color> band-c: #7c777cee;
+    // Slint reads #RRGGBBAA. These two were written alpha-first, so the whole
+    // window was being washed in translucent red — the "泛红" that survived
+    // every backdrop change.
+    out property <color> panel: #545454f0;
+    out property <color> veil: #545454c2;
     out property <color> focus: #35a8bb;
     out property <color> bad: #c62b2b;
     in-out property <length> radius: 10px;
@@ -346,6 +351,31 @@ component LookRow inherits Rectangle {
     }
 }
 
+export component Tray inherits SystemTrayIcon {
+    icon: @image-url("icon.png");
+    tooltip: "集成工业播报终端";
+    title: "edscene";
+    clicked => {
+        root.open();
+    }
+    Menu {
+        MenuItem {
+            title: "打开设置";
+            activated => {
+                root.open();
+            }
+        }
+        MenuItem {
+            title: "退出";
+            activated => {
+                root.quit();
+            }
+        }
+    }
+    callback open();
+    callback quit();
+}
+
 export component MainWindow inherits Window {
     title: "集成工业播报终端";
     icon: @image-url("icon.png");
@@ -376,6 +406,7 @@ export component MainWindow inherits Window {
     in property <bool> autostart: true;
     in property <bool> service-ready: false;
     in property <bool> prelogon: false;
+    in property <bool> tray-on: true;
     in property <string> volume-text: "80%";
     in property <float> volume: 0.8;
     in property <image> wallpaper;
@@ -402,9 +433,12 @@ export component MainWindow inherits Window {
     callback set-rounded(bool);
     callback set-autostart(bool);
     callback set-prelogon(bool);
+    callback set-tray(bool);
     callback set-volume(float);
     callback close-window();
-    callback drag-move(bool);
+    callback drag-start();
+    callback drag-move();
+    callback drag-end();
     callback pick-backdrop();
     callback clear-backdrop();
     callback elevate();
@@ -455,10 +489,17 @@ export component MainWindow inherits Window {
         height: 74px;
         TouchArea {
             enabled: root.native-drag;
-            // TouchArea has no pressed/released callback, only `moved` plus a
-            // `pressed` property — so the button state rides along with it.
-            moved => {
-                root.drag-move(self.pressed);
+            mouse-cursor: default;
+            // `moved` only fires while the button is down, so the press and the
+            // release have to come from pointer-event to be seen at all.
+            pointer-event(ev) => {
+                if (ev.kind == PointerEventKind.down) {
+                    root.drag-start();
+                } else if (ev.kind == PointerEventKind.move) {
+                    root.drag-move();
+                } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                    root.drag-end();
+                }
             }
         }
     }
@@ -815,6 +856,14 @@ export component MainWindow inherits Window {
                     index: root.prelogon ? 0 : 1;
                     picked(i) => {
                         root.set-prelogon(i == 0);
+                    }
+                }
+                LookRow {
+                    label: "托盘常驻";
+                    control: "switch";
+                    index: root.tray-on ? 0 : 1;
+                    picked(i) => {
+                        root.set-tray(i == 0);
                     }
                 }
                 Band {
