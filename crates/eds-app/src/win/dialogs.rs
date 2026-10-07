@@ -12,6 +12,9 @@ use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPRO
 use windows::Win32::UI::Shell::{
     IFileOpenDialog, FileOpenDialog, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    SPI_GETDESKWALLPAPER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+};
 
 fn com_init() {
     unsafe {
@@ -65,10 +68,51 @@ pub fn reveal(path: &std::path::Path) {
     }
 }
 
-/// Grab the desktop, shrink it hard and let Slint's bilinear stretch do the
-/// rest: a 1/8 sample with one box pass reads as a soft backdrop at ~1 % of
-/// the pixel cost. `None` on any failure, which the UI treats as 纯色.
+/// The desktop wallpaper, blurred.
+///
+/// Reading the wallpaper *file* is what makes this read as a backdrop. Grabbing
+/// the screen instead — which is what this used to do — turns the window into a
+/// smear of whatever happened to be behind it, and users called it 泛红.
 pub fn blurred_wallpaper() -> Option<slint::Image> {
+    wallpaper_files()
+        .iter()
+        .find_map(|p| crate::backdrop::soften_path(p))
+        .or_else(screen_grab)
+}
+
+/// Where the shell keeps the current wallpaper. Spotlight / slideshow
+/// wallpapers are only ever reachable through the transcoded copy, which has no
+/// extension at all — hence the decoder sniffing the bytes, not the name.
+fn wallpaper_files() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    let mut buf = [0u16; 520];
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            buf.len() as u32,
+            Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+    let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
+    let s = String::from_utf16_lossy(&buf[..end]);
+    if !s.is_empty() {
+        v.push(PathBuf::from(s));
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let themes = PathBuf::from(appdata)
+            .join("Microsoft")
+            .join("Windows")
+            .join("Themes");
+        v.push(themes.join("TranscodedWallpaper"));
+        v.push(themes.join("TranscodedWallpaper.jpg"));
+    }
+    v
+}
+
+/// Last resort: grab the desktop, shrink it hard and let Slint's bilinear
+/// stretch do the rest. `None` on any failure, which the UI treats as 纯色.
+fn screen_grab() -> Option<slint::Image> {
     unsafe {
         let screen = GetDC(None);
         if screen.is_invalid() {
@@ -109,14 +153,8 @@ pub fn blurred_wallpaper() -> Option<slint::Image> {
         if ok.is_err() || got == 0 {
             return None;
         }
-        Some(downsample_blur(&pixels, w as usize, h as usize))
+        crate::backdrop::from_bgra(&pixels, w as usize, h as usize)
     }
-}
-
-fn downsample_blur(bgra: &[u8], w: usize, h: usize) -> slint::Image {
-    let (soft, ow, oh) = eds_core::fx::soften(bgra, w, h, 8, eds_core::fx::Order::Bgra);
-    let shared = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&soft, ow as u32, oh as u32);
-    slint::Image::from_rgb8(shared)
 }
 
 fn wide(s: &str) -> Vec<u16> {

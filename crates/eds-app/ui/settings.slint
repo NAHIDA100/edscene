@@ -84,22 +84,17 @@ component SectionLabel inherits HorizontalLayout {
 }
 
 // 两段胶囊开关（开 / 关），白色滑块带位移动画。
+// 分段胶囊：每一段自己可点，两段的"开/关"和四段的"慢/标准/快/关闭"用同一个组件。
 component PillSwitch inherits Rectangle {
     in property <[string]> options: ["开", "关"];
     in property <int> index: 0;
     in property <bool> enabled: true;
+    in property <length> cell-width: 66px;
     callback changed(int);
-    width: 132px;
+    width: root.cell-width * root.options.length;
     height: 36px;
     border-radius: root.height / 2;
     background: #00000026;
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => {
-            root.changed(Math.mod(root.index + 1, root.options.length));
-        }
-    }
     Rectangle {
         x: root.index * (parent.width / root.options.length);
         width: parent.width / root.options.length;
@@ -114,92 +109,26 @@ component PillSwitch inherits Rectangle {
         }
         animate x { duration: Palette.anim; }
     }
-    for label[idx] in root.options: Text {
+    for label[idx] in root.options: Rectangle {
         x: idx * (parent.width / root.options.length);
         width: parent.width / root.options.length;
         height: 100%;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: label;
-        color: idx == root.index ? Palette.ink : Palette.muted;
-        font-size: 15px;
-        font-weight: idx == root.index ? 600 : 400;
-    }
-}
-
-// 下拉胶囊：白底 + 黑色倒三角，弹出同一套白底列表 + 黄色高亮条。
-component PillSelect inherits Rectangle {
-    in property <[string]> options;
-    in property <int> index: 0;
-    in property <bool> enabled: true;
-    callback picked(int);
-    width: 200px;
-    height: 36px;
-    border-radius: root.height / 2;
-    background: Palette.control;
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => {
-            pop.show();
+        Text {
+            width: 100%;
+            height: 100%;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: label;
+            color: idx == root.index ? Palette.ink : Palette.muted;
+            font-size: 15px;
+            font-weight: idx == root.index ? 600 : 400;
+            overflow: elide;
         }
-    }
-    Text {
-        x: 20px;
-        width: parent.width - 54px;
-        vertical-alignment: center;
-        horizontal-alignment: left;
-        text: root.options[root.index];
-        color: Palette.ink;
-        font-size: 15px;
-        font-weight: 600;
-        overflow: elide;
-    }
-    Path {
-        x: parent.width - 32px;
-        y: 15px;
-        width: 12px;
-        height: 8px;
-        commands: "M0 0 L12 0 L6 8 Z";
-        fill: Palette.ink;
-    }
-    pop := PopupWindow {
-        Rectangle {
-            width: 230px;
-            height: root.options.length * 34px + 12px;
-            border-radius: 12px;
-            background: Palette.control;
-            border-width: 1px;
-            border-color: #00000022;
-            for option[idx] in root.options: Rectangle {
-                y: idx * 34px + 6px;
-                height: 34px;
-                width: parent.width;
-                Text {
-                    x: 20px;
-                    width: parent.width - 40px;
-                    height: 100%;
-                    vertical-alignment: center;
-                    horizontal-alignment: left;
-                    text: option;
-                    color: idx == root.index ? Palette.ink : Palette.ink-soft;
-                    font-weight: idx == root.index ? 700 : 400;
-                    font-size: 15px;
-                }
-                Rectangle {
-                    height: 3px;
-                    y: parent.height - 3px;
-                    width: parent.width;
-                    background: Palette.accent;
-                    visible: ta2.has-hover;
-                }
-                ta2 := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.picked(idx);
-                        pop.close();
-                    }
-                }
+        TouchArea {
+            enabled: root.enabled && idx != root.index;
+            mouse-cursor: pointer;
+            clicked => {
+                root.changed(idx);
             }
         }
     }
@@ -384,16 +313,11 @@ component LookRow inherits Rectangle {
             min-width: 0px;
             overflow: elide;
         }
-        if root.control == "select" || root.control == "seg": PillSelect {
-            options: root.options;
+        if root.control == "select" || root.control == "switch": PillSwitch {
+            options: root.control == "switch" ? ["开", "关"] : root.options;
             index: root.index;
-            picked(i) => {
-                root.picked(i);
-            }
-        }
-        if root.control == "switch": PillSwitch {
-            options: ["开", "关"];
-            index: root.index;
+            cell-width: root.control == "switch" ? 66px : 78px;
+            vertical-stretch: 0;
             changed(i) => {
                 root.picked(i);
             }
@@ -458,6 +382,10 @@ export component MainWindow inherits Window {
     in property <bool> has-wallpaper: false;
     in property <string> version: "";
     in property <string> config-path: "";
+    in property <string> backdrop-name: "";
+    in property <bool> status-bad: false;
+    in property <bool> need-admin: false;
+    in property <bool> native-drag: false;
 
     callback toggle-row(int, bool);
     callback preview(int);
@@ -476,6 +404,10 @@ export component MainWindow inherits Window {
     callback set-prelogon(bool);
     callback set-volume(float);
     callback close-window();
+    callback drag-move(bool);
+    callback pick-backdrop();
+    callback clear-backdrop();
+    callback elevate();
 
     // ---- 背景：壁纸副本 / 实时模糊时是一张缩过的小图，否则纯色
     Rectangle {
@@ -502,18 +434,33 @@ export component MainWindow inherits Window {
             background: Palette.veil;
             visible: root.has-wallpaper;
         }
+        // 只压顶栏：整面压暗会把背景糊成一片脏色，名字里写的也不是这个。
         Rectangle {
             width: 100%;
-            height: 100%;
+            height: 74px;
             background: #00000059;
             visible: root.top-bar-dim;
         }
     }
 
-    // ---- 无边框窗口的拖动区（Slint 内建，交给窗口系统移动）
+    // ---- 无边框窗口的拖动区。Slint 自带的 WindowMoveArea 在 Windows 的
+    // no-frame + 透明窗口上不动（实测三个起点都不动），所以 Windows 上由
+    // Rust 按光标的绝对位置搬窗口；其它平台把事件让给下面那个 WindowMoveArea。
     WindowMoveArea {
         width: 100%;
-        height: 64px;
+        height: 74px;
+    }
+    Rectangle {
+        width: 100%;
+        height: 74px;
+        TouchArea {
+            enabled: root.native-drag;
+            // TouchArea has no pressed/released callback, only `moved` plus a
+            // `pressed` property — so the button state rides along with it.
+            moved => {
+                root.drag-move(self.pressed);
+            }
+        }
     }
 
     Rectangle {
@@ -581,7 +528,6 @@ export component MainWindow inherits Window {
 
         if root.tab == 0: ScrollView {
             content-width: root.width - 52px;
-            content-height: self.height;
             width: 100%;
             height: 100%;
             VerticalLayout {
@@ -713,7 +659,6 @@ export component MainWindow inherits Window {
 
         if root.tab == 1: ScrollView {
             content-width: root.width - 52px;
-            content-height: self.height;
             width: 100%;
             height: 100%;
             VerticalLayout {
@@ -745,11 +690,59 @@ export component MainWindow inherits Window {
                 }
                 LookRow {
                     label: "背景模糊";
-                    control: "seg";
+                    control: "select";
                     options: root.blur-options;
                     index: root.blur-index;
                     picked(i) => {
                         root.set-blur(i);
+                    }
+                }
+                // 背景图：默认跟着系统壁纸，也可以指到自己喜欢的一张图。
+                Rectangle {
+                    height: 54px;
+                    clip: true;
+                    Band {
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                    HorizontalLayout {
+                        padding-left: 22px;
+                        padding-right: 16px;
+                        alignment: stretch;
+                        Text {
+                            text: "背景图片";
+                            color: Palette.ink;
+                            font-size: 17px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            horizontal-stretch: 0;
+                        }
+                        Text {
+                            text: root.backdrop-name == "" ? "跟随系统桌面壁纸" : root.backdrop-name;
+                            color: root.backdrop-name == "" ? Palette.muted : Palette.ink-soft;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            horizontal-stretch: 1;
+                            min-width: 0px;
+                            overflow: elide;
+                        }
+                        SmallPill {
+                            text: "选一张";
+                            horizontal-stretch: 0;
+                            clicked => {
+                                root.pick-backdrop();
+                            }
+                        }
+                        if root.backdrop-name != "": SmallPill {
+                            text: "跟随系统";
+                            fill: #00000033;
+                            ink: Palette.ink;
+                            horizontal-stretch: 0;
+                            clicked => {
+                                root.clear-backdrop();
+                            }
+                        }
                     }
                 }
                 SectionLabel {
@@ -799,7 +792,6 @@ export component MainWindow inherits Window {
 
         if root.tab == 2: ScrollView {
             content-width: root.width - 52px;
-            content-height: self.height;
             width: 100%;
             height: 100%;
             VerticalLayout {
@@ -882,16 +874,57 @@ export component MainWindow inherits Window {
     }
 
     // ---- 页脚
-    Text {
+    // ---- 页脚：反馈要看得见；需要管理员时给一个能按的按钮，而不是小字。
+    Rectangle {
         x: 26px;
-        y: parent.height - 40px;
-        width: root.width - 220px;
-        text: root.status-text;
-        color: Palette.muted;
-        font-size: 13px;
-        vertical-alignment: center;
-        horizontal-alignment: left;
-        overflow: elide;
+        y: root.height - 52px;
+        width: Math.min(560px, root.width - 220px);
+        height: 38px;
+        visible: root.status-text != "";
+        border-radius: 19px;
+        background: root.status-bad ? #4a1d1df0 : #101413e6;
+        border-width: 2px;
+        border-color: root.status-bad ? #e0575b : Palette.accent;
+        Text {
+            x: 16px;
+            width: parent.width - 32px;
+            vertical-alignment: center;
+            text: root.status-text;
+            color: root.status-bad ? #ffd9d9 : #f2f2ef;
+            font-size: 14px;
+            font-weight: 600;
+            overflow: elide;
+        }
+    }
+    if root.need-admin: Rectangle {
+        x: 26px;
+        y: root.height - 100px;
+        width: 196px;
+        height: 36px;
+        border-radius: 18px;
+        background: Palette.accent;
+        ata := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.elevate();
+            }
+        }
+        Text {
+            x: 16px;
+            width: parent.width - 32px;
+            vertical-alignment: center;
+            text: "以管理员身份开启";
+            color: Palette.accent-ink;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        Rectangle {
+            height: 100%;
+            width: 100%;
+            border-radius: 18px;
+            border-width: ata.has-hover ? 2px : 0px;
+            border-color: Palette.focus;
+        }
     }
     Rectangle {
         x: root.width - 152px;

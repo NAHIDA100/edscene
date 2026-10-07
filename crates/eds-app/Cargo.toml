@@ -36,6 +36,12 @@ rodio = { version = "0.22.2", default-features = false, features = [
 ] }
 interprocess = { version = "2.4.4", default-features = false }
 widestring = "1"
+# The backdrop decodes the desktop's own wallpaper file, on every platform.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "bmp",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -59,7 +65,6 @@ windows-service = "0.8.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 eds-linux = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [build-dependencies]
 slint-build = "1.18.1"

@@ -151,6 +151,10 @@ pub struct Ui {
     pub include_rdp: bool,
     /// Optional .ttf/.otf used instead of the system CJK fallback chain.
     pub font_file: String,
+    /// Backdrop image for the settings window. Empty means "whatever the
+    /// desktop is showing"; the shipped default must never be a picture file,
+    /// because no artwork is allowed in this repository.
+    pub backdrop: String,
     /// 0 关闭 … 3 重：controls the diagonal hatch and the corner radius.
     pub decoration: u8,
     /// Last opened tab, so the window comes back where you left it.
@@ -168,6 +172,7 @@ impl Default for Ui {
             animation: Speed::default(),
             include_rdp: false,
             font_file: String::new(),
+            backdrop: String::new(),
             decoration: 2,
             tab: 0,
         }

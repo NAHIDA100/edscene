@@ -134,7 +134,7 @@ pub fn unit_installed() -> bool {
 /// Windows, so the backdrop looks the same on either platform.
 pub fn blurred_wallpaper() -> Option<slint::Image> {
     for path in desktop::wallpaper_candidates() {
-        if let Some(img) = soften_path(&path) {
+        if let Some(img) = crate::backdrop::soften_path(&path) {
             return Some(img);
         }
     }
@@ -146,32 +146,13 @@ pub fn blurred_wallpaper() -> Option<slint::Image> {
     None
 }
 
-fn soften_path(path: &Path) -> Option<slint::Image> {
-    soften_bytes(&std::fs::read(path).ok()?)
-}
-
 fn grab(argv: &[&'static str]) -> Option<slint::Image> {
     let (head, rest) = argv.split_first()?;
     let out = Command::new(head).args(rest).output().ok()?;
     if !out.status.success() || out.stdout.is_empty() {
         return None;
     }
-    soften_bytes(&out.stdout)
-}
-
-fn soften_bytes(bytes: &[u8]) -> Option<slint::Image> {
-    use image::ImageReader;
-    let cur = std::io::Cursor::new(bytes.to_vec());
-    let img = ImageReader::new(cur)
-        .with_guessed_format()
-        .ok()?
-        .decode()
-        .ok()?;
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    let rgba = img.to_rgba8().into_raw();
-    let (soft, ow, oh) = eds_core::fx::soften(&rgba, w, h, 8, eds_core::fx::Order::Rgba);
-    let buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&soft, ow as u32, oh as u32);
-    Some(slint::Image::from_rgb8(buf))
+    crate::backdrop::soften_bytes(&out.stdout)
 }
 
 /// Native pickers: the desktop's own tool, whichever of the two it ships.

@@ -1,3 +1,4 @@
+mod backdrop;
 mod log;
 mod paths;
 mod pipeline;

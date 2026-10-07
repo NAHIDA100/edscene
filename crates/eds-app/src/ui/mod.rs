@@ -23,6 +23,26 @@ struct State {
     paths: Paths,
     reset_armed: Cell<bool>,
     blur_timer: RefCell<Option<Timer>>,
+    status_timer: RefCell<Option<Timer>>,
+    grab: RefCell<Option<crate::platform::drag::Grab>>,
+}
+
+impl State {
+    /// The banner at the bottom is the only feedback the window has, so make it
+    /// say what happened, in what colour, and then get out of the way.
+    fn status(&self, win: &MainWindow, msg: String, bad: bool) {
+        win.set_status_text(SharedString::from(msg));
+        win.set_status_bad(bad);
+        let weak = win.as_weak();
+        let mut t = self.status_timer.borrow_mut();
+        let timer = Timer::default();
+        let _ = timer.start(TimerMode::SingleShot, Duration::from_secs(8), move || {
+            if let Some(win) = weak.upgrade() {
+                win.set_status_text(SharedString::from(""));
+            }
+        });
+        *t = Some(timer);
+    }
 }
 
 pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
@@ -32,6 +52,8 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
         paths,
         reset_armed: Cell::new(false),
         blur_timer: RefCell::new(None),
+        status_timer: RefCell::new(None),
+        grab: RefCell::new(None),
     });
     let weak = win.as_weak();
     st.paint(&win);
@@ -58,21 +80,15 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
         let Some(kind) = kind_at(idx) else { return };
         let r = resolve::resolve(&s.cfg.borrow(), &s.paths, kind);
         let Some(path) = r.path else {
-            win.set_status_text(SharedString::from(format!(
-                "！{} 找不到素材（{}）",
-                def(kind).title_zh, r.preset_file
-            )));
+            s.status(&win, format!("！{} 找不到素材（{}）", def(kind).title_zh, r.preset_file), true);
             return;
         };
         if r.status != SoundStatus::Ready {
-            win.set_status_text(SharedString::from(format!(
-                "！{}：{}",
-                def(kind).title_zh, r.status.label()
-            )));
+            s.status(&win, format!("！{}：{}", def(kind).title_zh, r.status.label()), true);
             return;
         }
         let volume = s.cfg.borrow().volume_for(kind);
-        win.set_status_text(SharedString::from(format!("试听 {}…", def(kind).title_zh)));
+        s.status(&win, format!("试听 {}…", def(kind).title_zh), false);
         std::thread::spawn(move || {
             let _ = crate::player::play_blocking(&path, volume, Duration::from_secs(30));
         });
@@ -90,7 +106,7 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
                 s.cfg.borrow_mut().event_mut(kind).file = String::new();
                 s.commit(&win, format!("{} 已替换为 {}", def(kind).title_zh, dst.display()));
             }
-            Err(e) => win.set_status_text(SharedString::from(format!("！替换失败：{e}"))),
+            Err(e) => s.status(&win, format!("！替换失败：{e}"), true),
         }
     });
 
@@ -109,14 +125,14 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
     win.on_reset_defaults(move || {
         let Some(win) = w.upgrade() else { return };
         if !s.reset_armed.replace(true) {
-            win.set_status_text(SharedString::from("再点一次「恢复默认」确认：所有设置回到出厂状态"));
+            s.status(&win, "再点一次「恢复默认」确认：所有设置回到出厂状态".into(), false);
             let s2 = s.clone();
             let w2 = w.clone();
             let t = Timer::default();
             let _ = t.start(TimerMode::SingleShot, Duration::from_secs(6), move || {
                 s2.reset_armed.set(false);
                 if let Some(win) = w2.upgrade() {
-                    win.set_status_text(SharedString::from("已取消"));
+                    s2.status(&win, "已取消".into(), false);
                 }
             });
             return;
@@ -138,7 +154,7 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
                 s.cfg.borrow_mut().sounds.dir = p.display().to_string();
                 s.commit(&win, format!("素材目录 → {}", p.display()));
             }
-            Err(e) => win.set_status_text(SharedString::from(format!("！{e}"))),
+            Err(e) => s.status(&win, format!("！{e}"), true),
         }
     });
 
@@ -222,9 +238,14 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
         match crate::platform::set_autostart(on) {
             Ok(()) => {
                 s.cfg.borrow_mut().runtime.autostart = on;
+                win.set_need_admin(false);
                 s.commit(&win, format!("开机自启 → {}", if on { "开" } else { "关" }));
             }
-            Err(e) => win.set_status_text(SharedString::from(format!("！{e}"))),
+            // A bare sentence in the corner is not something you can act on.
+            Err(e) => {
+                win.set_need_admin(true);
+                s.status(&win, format!("！{e}"), true);
+            }
         }
     });
     let s = st.clone();
@@ -239,6 +260,46 @@ pub fn show(cfg: Config, paths: Paths) -> Result<(), String> {
                 if on { "开" } else { "关" }
             ),
         );
+    });
+    let s = st.clone();
+    let w = weak.clone();
+    win.on_pick_backdrop(move || {
+        let Some(win) = w.upgrade() else { return };
+        let Some(picked) = pick_file_pub("选择背景图片") else { return };
+        let shown = picked.display().to_string();
+        s.cfg.borrow_mut().ui.backdrop = shown.clone();
+        s.apply_backdrop(&win);
+        s.commit(&win, format!("背景图片 → {}", file_name(&shown)));
+    });
+    let s = st.clone();
+    let w = weak.clone();
+    win.on_clear_backdrop(move || {
+        let Some(win) = w.upgrade() else { return };
+        s.cfg.borrow_mut().ui.backdrop = String::new();
+        s.apply_backdrop(&win);
+        s.commit(&win, "背景图片 → 跟随系统桌面壁纸".into());
+    });
+    let s = st.clone();
+    let w = weak.clone();
+    win.on_elevate(move || {
+        let Some(win) = w.upgrade() else { return };
+        match crate::platform::elevate_for_autostart() {
+            Ok(()) => s.status(&win, "已请求管理员权限，请在弹窗里点「是」".into(), false),
+            Err(e) => s.status(&win, format!("！{e}"), true),
+        }
+    });
+    let s = st.clone();
+    win.on_drag_move(move |down| {
+        if !down {
+            *s.grab.borrow_mut() = None;
+            return;
+        }
+        if s.grab.borrow().is_none() {
+            *s.grab.borrow_mut() = crate::platform::drag::begin();
+        }
+        if let Some(g) = s.grab.borrow().as_ref() {
+            crate::platform::drag::apply(g);
+        }
     });
     let w = weak.clone();
     win.on_close_window(move || {
@@ -292,9 +353,11 @@ impl State {
         win.set_autostart(cfg.runtime.autostart);
         win.set_prelogon(cfg.runtime.experimental_prelogon);
         win.set_sounds_dir(SharedString::from(cfg.sounds.dir.clone()));
+        win.set_backdrop_name(SharedString::from(file_name(&cfg.ui.backdrop)));
         win.set_volume(cfg.volume_for_display());
         win.set_volume_text(SharedString::from(format!("{}%", cfg.audio.volume)));
         win.set_service_ready(crate::platform::service_installed());
+        win.set_native_drag(crate::platform::native_drag());
         drop(cfg);
         self.refresh_rows(win);
     }
@@ -360,7 +423,7 @@ impl State {
         self.save();
         let cfg = self.cfg.borrow();
         let (ok, total) = resolve::readiness(&cfg, &self.paths);
-        win.set_status_text(SharedString::from(format!("{msg} · 已提交（就绪 {ok}/{total}）")));
+        self.status(win, format!("{msg} · 已提交（就绪 {ok}/{total}）"), false);
         drop(cfg);
         self.refresh_rows(win);
         let cfg = self.cfg.borrow();
@@ -370,14 +433,17 @@ impl State {
     /// 纯色 / 壁纸副本 / 实时模糊. Capture failures degrade to 纯色 quietly,
     /// because a missing compositor is normal on a server or inside a VM.
     fn apply_backdrop(&self, win: &MainWindow) {
-        let mode = self.cfg.borrow().ui.blur_mode;
+        let cfg = self.cfg.borrow();
+        let mode = cfg.ui.blur_mode;
+        let picked = cfg.ui.backdrop.clone();
+        drop(cfg);
         let mut timer = self.blur_timer.borrow_mut();
         *timer = None;
         match mode {
             BlurMode::Solid => {
                 win.set_has_wallpaper(false);
             }
-            BlurMode::WallpaperCopy => match crate::platform::blurred_wallpaper() {
+            BlurMode::WallpaperCopy => match crate::platform::backdrop(&picked) {
                 Some(img) => {
                     win.set_wallpaper(img);
                     win.set_has_wallpaper(true);
@@ -385,7 +451,7 @@ impl State {
                 None => win.set_has_wallpaper(false),
             },
             BlurMode::Realtime => {
-                if let Some(img) = crate::platform::blurred_wallpaper() {
+                if let Some(img) = crate::platform::backdrop(&picked) {
                     win.set_wallpaper(img);
                     win.set_has_wallpaper(true);
                 }
@@ -401,6 +467,14 @@ impl State {
             }
         }
     }
+}
+
+/// Just the last path component, for the 背景图片 row.
+fn file_name(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
 /// `v` is 0xRRGGBB.
