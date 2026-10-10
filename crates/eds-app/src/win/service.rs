@@ -382,10 +382,17 @@ fn body() -> Result<(), String> {
     let paths = paths::ensure_machine_paths().unwrap_or_else(paths::active_paths);
     let (sig_tx, sig_rx) = mpsc::channel::<Signal>();
     let tx = sig_tx.clone();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let handle = service_control_handler::register(SERVICE_NAME, move |ctrl| {
         match ctrl {
             // Carries no payload: it only means "re-read the status now".
             ServiceControl::PowerEvent(PowerEventParam::PowerStatusChange) => poll_power(&tx),
+            // Stop and Shutdown reach no dispatcher: without this the loop
+            // keeps running, the SCM waits in vain, and every reinstall has
+            // to end with a taskkill.
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                let _ = stop_tx.send(());
+            }
             other => {
                 if let Some(s) = translate(other) {
                     let _ = tx.send(s);
@@ -399,12 +406,10 @@ fn body() -> Result<(), String> {
         .set_service_status(running_status())
         .map_err(|e| e.to_string())?;
 
-    let r = supervise(&paths, sig_rx, &sig_tx);
-    if r.is_err() {
-        // The SCM only restarts a service it saw stop. Without this report a
-        // failed start leaves a zombie that `sc query` keeps calling RUNNING.
-        let _ = handle.set_service_status(stopped_status());
-    }
+    let r = supervise(&paths, sig_rx, &sig_tx, stop_rx);
+    // Clean exit or failure, the SCM has to be told either way — a service that
+    // dies quietly leaves a "RUNNING" zombie that no watchdog will restart.
+    let _ = handle.set_service_status(stopped_status());
     r
 }
 
@@ -412,6 +417,7 @@ fn supervise(
     paths: &eds_core::Paths,
     sig_rx: mpsc::Receiver<Signal>,
     sig_tx: &mpsc::Sender<Signal>,
+    stop_rx: mpsc::Receiver<()>,
 ) -> Result<(), String> {
     let server = Server::start()?;
     let mut cfg = load_at(paths);
@@ -430,6 +436,9 @@ fn supervise(
     let mut agents: Vec<u32> = Vec::new();
 
     loop {
+        if stop_rx.try_recv().is_ok() {
+            return Ok(());
+        }
         let sig = match sig_rx.recv_timeout(poll) {
             Ok(s) => Some(s),
             Err(mpsc::RecvTimeoutError::Timeout) => {

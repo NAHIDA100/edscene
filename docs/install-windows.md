@@ -70,7 +70,11 @@ edscene --uninstall-service
 
 ## 换了新版 exe 之后
 
-服务进程会锁住旧 exe，直接覆盖会报"拒绝访问"。在**管理员**窗口里按顺序：
+正常做法：解压新的 `edscene-setup-*.zip`，双击里面的 `setup.bat`。它会停服务、
+覆盖 `C:\Program Files\edscene\`、再注册并启动，不需要你先杀进程。
+
+只有**旧版**（服务进程收到停止请求不回应的那几版）会卡住，这时它自己会打印
+`… 的进程对停止请求毫无反应（多半是旧版假死）` 并让你手动来一次：
 
 ```powershell
 sc.exe config edscene-broadcast start= disabled   # 先断掉自动重启
@@ -79,7 +83,7 @@ Copy-Item D:\works\edscene\target\release\edscene.exe 'C:\Program Files\edscene\
 & 'C:\Program Files\edscene\edscene.exe' --install-service   # 会把启动类型改回自动
 ```
 
-`--install-service` 自带停-再启，不需要手工 `net start`。
+从这一步之后，服务就能正常响应停止与关机，重装不再需要 `taskkill`。
 
 不想装服务也能自启：任务管理器 → 启动 → 新建一条指向
 `edscene.exe --agent` 的启动项（轻量模式，代价是登录界面上不出声）。
