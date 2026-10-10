@@ -1,11 +1,10 @@
 //! The few things the UI needs from the OS that are not events: autostart
 //! state, a backdrop image, and moving a borderless window.
 
-/// Whether the header strip must be dragged by us. Slint's `WindowMoveArea`
-/// does nothing for a frameless transparent window on Windows, so there we
-/// track the cursor ourselves; elsewhere its implementation is left in place.
-pub fn native_drag() -> bool {
-    cfg!(windows)
+/// Whether the header strip has to be dragged by us. With a native frame
+/// Windows does it, and an overlay TouchArea there would only swallow clicks.
+pub fn native_drag(native_frame: bool) -> bool {
+    cfg!(windows) && !native_frame
 }
 
 #[cfg(windows)]
@@ -115,17 +114,22 @@ pub mod drag {
         Ok(Grab { hwnd, dx: p.x - r.left, dy: p.y - r.top })
     }
 
-    /// Let the window manager do the dragging: this is the classic borderless
-    /// window trick, and it is what a real title bar does, so the capture, the
-    /// thresholds and the pointer during the move are all handled by Windows.
+    /// Let the window manager do the dragging: the classic borderless window
+    /// trick. `lParam` has to carry the cursor's screen position — pass zero and
+    /// Windows drags as though the pointer were at (0, 0), which looks exactly
+    /// like "nothing happens".
     pub fn modal(g: &Grab) -> Result<(), String> {
+        let Some(p) = cursor() else {
+            return Err("拿不到光标位置".into());
+        };
+        let lp = (((p.y as u16 as u32) << 16) | (p.x as u16 as u32)) as isize;
         unsafe {
             ReleaseCapture().map_err(|e| format!("ReleaseCapture: {e}"))?;
             SendMessageW(
                 g.hwnd,
                 WM_NCLBUTTONDOWN,
                 Some(WPARAM(HTCAPTION as usize)),
-                Some(LPARAM(0)),
+                Some(LPARAM(lp)),
             );
         }
         Ok(())

@@ -208,6 +208,15 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
     });
     let s = st.clone();
     let w = weak.clone();
+    win.on_set_frame(move |i| {
+        let Some(win) = w.upgrade() else { return };
+        s.cfg.borrow_mut().ui.native_frame = i == 1;
+        // 换边框要重建窗口样式，Slint 在下一次显示时才会应用；先把属性推过去。
+        s.sync(&win);
+        s.commit(&win, format!("窗口边框 → {}", if i == 1 { "系统标题栏" } else { "无边框" }));
+    });
+    let s = st.clone();
+    let w = weak.clone();
     win.on_set_top_bar_dim(move |on| {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.top_bar_dim = on;
@@ -367,6 +376,22 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
             ),
         );
     });
+    // 系统标题栏的 × 也要"收进托盘"而不是销毁窗口：藏起来并告诉 Slint 别关，
+    // 不然托盘的「打开设置」就唤不回它了。
+    {
+        let w = weak.clone();
+        win.window().on_close_requested(move || {
+            if let Some(win) = w.upgrade() {
+                win.hide().ok();
+            }
+            if has_tray {
+                slint::CloseRequestResponse::KeepWindowShown
+            } else {
+                slint::quit_event_loop().ok();
+                slint::CloseRequestResponse::HideWindow
+            }
+        });
+    }
     let w = weak.clone();
     win.on_close_window(move || {
         if let Some(win) = w.upgrade() {
@@ -400,8 +425,20 @@ fn kind_at(idx: i32) -> Option<EventKind> {
 impl State {
     /// Push config → window: palette, options, row model.
     fn paint(&self, win: &MainWindow) {
-        let cfg = self.cfg.borrow();
         self.paint_palette(win);
+        // Only at startup: `tab` lives in the window while you click around, and
+        // the config gets it back on exit.
+        let tab = self.cfg.borrow().ui.tab;
+        win.set_tab(tab as i32);
+        self.sync(win);
+        self.refresh_rows(win);
+    }
+
+    /// Every control that shows config state, re-pushed. `commit()` has to call
+    /// this: a switch whose property still holds the old value looks like the
+    /// click did nothing, which is exactly what users reported.
+    fn sync(&self, win: &MainWindow) {
+        let cfg = self.cfg.borrow();
         win.set_accent_index(match cfg.ui.theme {
             Theme::ValleyYellow => 0,
             Theme::WulingBlue => 1,
@@ -419,8 +456,8 @@ impl State {
         });
         win.set_deco_index(cfg.ui.decoration as i32);
         win.set_top_bar_dim(cfg.ui.top_bar_dim);
-        win.set_tab(cfg.ui.tab as i32);
         win.set_rounded(cfg.ui.corner_rounded);
+        win.set_native_frame(cfg.ui.native_frame);
         win.set_autostart(cfg.runtime.autostart);
         win.set_prelogon(cfg.runtime.experimental_prelogon);
         win.set_tray_on(cfg.ui.tray);
@@ -429,9 +466,7 @@ impl State {
         win.set_volume(cfg.volume_for_display());
         win.set_volume_text(SharedString::from(format!("{}%", cfg.audio.volume)));
         win.set_service_ready(crate::platform::service_installed());
-        win.set_native_drag(crate::platform::native_drag());
-        drop(cfg);
-        self.refresh_rows(win);
+        win.set_native_drag(crate::platform::native_drag(cfg.ui.native_frame));
     }
 
     fn paint_palette(&self, win: &MainWindow) {
@@ -495,11 +530,10 @@ impl State {
         self.save();
         let cfg = self.cfg.borrow();
         let (ok, total) = resolve::readiness(&cfg, &self.paths);
-        self.status(win, format!("{msg} · 已提交（就绪 {ok}/{total}）"), false);
         drop(cfg);
+        self.status(win, format!("{msg} · 已提交（就绪 {ok}/{total}）"), false);
+        self.sync(win);
         self.refresh_rows(win);
-        let cfg = self.cfg.borrow();
-        win.set_sounds_dir(SharedString::from(cfg.sounds.dir.clone()));
     }
 
     /// 纯色 / 壁纸副本 / 实时模糊. Capture failures degrade to 纯色 quietly,

@@ -1,4 +1,4 @@
-# edscene 安装脚本（Windows）
+﻿# edscene 安装脚本（Windows）
 #
 # 双击同目录的 setup.bat 即可；它会自己申请管理员权限。
 # 也可以直接跑：powershell -File install.ps1 -Target "D:\edscene"

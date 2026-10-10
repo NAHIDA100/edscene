@@ -1,4 +1,4 @@
-# Assemble the Windows release archives from a built tree.
+﻿# Assemble the Windows release archives from a built tree.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\pack.ps1 `
 #       -Assets "D:\works\eds" -Background "C:\path\to\picture.jpg" -Out "D:\works\edscene-dist"
@@ -17,6 +17,7 @@ param(
     [string]$Assets = '',
     [string]$Background = '',
     [string]$Out = 'D:\works\edscene-dist',
+    [string]$Exe = '',
     [string]$Version = '0.1.0'
 )
 
@@ -24,7 +25,7 @@ $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $pkg = Join-Path $Out "pkg\edscene-$Version-windows-x64"
 
-$exe = Join-Path $src 'target\release\edscene.exe'
+if ($Exe -eq '') { $exe = Join-Path $src 'target\release\edscene.exe' } else { $exe = $Exe }
 if (-not (Test-Path $exe)) { throw "先 cargo build --release：找不到 $exe" }
 
 New-Item -ItemType Directory -Force -Path $pkg | Out-Null

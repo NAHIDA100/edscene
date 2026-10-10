@@ -158,6 +158,10 @@ pub struct Ui {
     /// Keep a settings window in the notification area, started by the service
     /// at logon, so the GUI is one click away instead of one Explorer trip.
     pub tray: bool,
+    /// Draw our own title bar (`false`) or let the window manager decorate the
+    /// window (`true`, the default). Dragging, resizing and Win+arrow snapping
+    /// are only guaranteed to behave with a real frame.
+    pub native_frame: bool,
     /// 0 关闭 … 3 重：controls the diagonal hatch and the corner radius.
     pub decoration: u8,
     /// Last opened tab, so the window comes back where you left it.
@@ -177,6 +181,7 @@ impl Default for Ui {
             font_file: String::new(),
             backdrop: String::new(),
             tray: true,
+            native_frame: true,
             decoration: 2,
             tab: 0,
         }

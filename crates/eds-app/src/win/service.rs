@@ -77,17 +77,47 @@ fn service_info() -> Result<ServiceInfo, String> {
 ///
 /// Without this, clicking "以管理员身份开启" in a settings window that happens
 /// to run from `target\release` re-points the boot-time service at a build
-/// directory that can be deleted at any moment.
+/// directory that can be deleted at any moment — which is also how the service
+/// ends up locking its own source tree against rebuilds.
 fn installed_info(mgr: &ServiceManager) -> Result<ServiceInfo, String> {
     let mut info = service_info()?;
+    let mut wanted: Option<std::path::PathBuf> = None;
     if let Ok(svc) = mgr.open_service(SERVICE_NAME, ServiceAccess::QUERY_CONFIG) {
         if let Ok(cur) = svc.query_config() {
-            if cur.executable_path.is_file() && cur.executable_path != info.executable_path {
-                info.executable_path = cur.executable_path.clone();
+            if cur.executable_path.is_file() && !in_build_dir(&cur.executable_path) {
+                wanted = Some(cur.executable_path.clone());
             }
         }
     }
+    // A build-directory path (or none at all) is worse than the documented
+    // install location, if something was ever installed there.
+    let wanted = wanted.or_else(|| {
+        let pd = std::env::var_os("ProgramFiles")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files"))
+            .join("edscene")
+            .join("edscene.exe");
+        pd.is_file().then_some(pd)
+    });
+    if let Some(p) = wanted {
+        if p != info.executable_path {
+            if in_build_dir(&info.executable_path) {
+                eprintln!(
+                    "提示：这次是从构建目录 {} 运行的，服务镜像改用 {p:?}，\
+                     以免开机自启依赖一个随时会被删掉的目录。",
+                    info.executable_path.display()
+                );
+            }
+            info.executable_path = p;
+        }
+    }
     Ok(info)
+}
+
+/// True for `…\target\release\edscene.exe` and friends.
+fn in_build_dir(p: &Path) -> bool {
+    p.ancestors()
+        .any(|a| a.file_name().map(|n| n == "target").unwrap_or(false))
 }
 
 /// windows-service prints API failures as the useless "IO error in winapi

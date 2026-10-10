@@ -30,7 +30,7 @@ export global Palette {
     // window was being washed in translucent red — the "泛红" that survived
     // every backdrop change.
     out property <color> panel: #545454f0;
-    out property <color> veil: #545454c2;
+    out property <color> veil: #545454a6;
     out property <color> focus: #35a8bb;
     out property <color> bad: #c62b2b;
     in-out property <length> radius: 10px;
@@ -379,7 +379,9 @@ export component Tray inherits SystemTrayIcon {
 export component MainWindow inherits Window {
     title: "集成工业播报终端";
     icon: @image-url("icon.png");
-    no-frame: true;
+    // 系统标题栏 = 拖动、缩放、Win+方向线吸附全都归 Windows 管，不会出岔子；
+    // 无边框时才用下面那块自绘的拖动区。
+    no-frame: !root.native-frame;
     background: transparent;
     forward-focus: fs;
     default-font-size: 15px;
@@ -417,6 +419,7 @@ export component MainWindow inherits Window {
     in property <bool> status-bad: false;
     in property <bool> need-admin: false;
     in property <bool> native-drag: false;
+    in property <bool> native-frame: true;
 
     callback toggle-row(int, bool);
     callback preview(int);
@@ -431,6 +434,7 @@ export component MainWindow inherits Window {
     callback set-deco(int);
     callback set-top-bar-dim(bool);
     callback set-rounded(bool);
+    callback set-frame(int);
     callback set-autostart(bool);
     callback set-prelogon(bool);
     callback set-tray(bool);
@@ -523,6 +527,7 @@ export component MainWindow inherits Window {
         vertical-alignment: center;
     }
     CloseButton {
+        visible: !root.native-frame;
         x: root.width - 46px;
         y: 16px;
         clicked => {
@@ -788,6 +793,15 @@ export component MainWindow inherits Window {
                 }
                 SectionLabel {
                     text: "几何";
+                }
+                LookRow {
+                    label: "窗口边框";
+                    control: "select";
+                    options: ["无边框", "系统标题栏"];
+                    index: root.native-frame ? 1 : 0;
+                    picked(i) => {
+                        root.set-frame(i);
+                    }
                 }
                 LookRow {
                     label: "圆角";
