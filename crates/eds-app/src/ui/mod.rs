@@ -8,7 +8,7 @@ use eds_core::config::{BlurMode, Config, Speed, Theme};
 use eds_core::presets::{def, EVENTS};
 use eds_core::resolve::{self, SoundStatus};
 use eds_core::{EventKind, Paths};
-use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -25,6 +25,8 @@ struct State {
     blur_timer: RefCell<Option<Timer>>,
     status_timer: RefCell<Option<Timer>>,
     grab: RefCell<Option<crate::platform::drag::Grab>>,
+    /// Kept so one flipped switch can redraw one row instead of the whole table.
+    rows: RefCell<Option<Rc<VecModel<EventRow>>>>,
 }
 
 impl State {
@@ -54,6 +56,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         blur_timer: RefCell::new(None),
         status_timer: RefCell::new(None),
         grab: RefCell::new(None),
+        rows: RefCell::new(None),
     });
     let weak = win.as_weak();
     st.paint(&win);
@@ -70,7 +73,11 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let Some(win) = w.upgrade() else { return };
         let Some(kind) = kind_at(idx) else { return };
         s.cfg.borrow_mut().event_mut(kind).enabled = on;
-        s.commit(&win, format!("{} → {}", def(kind).title_zh, if on { "开" } else { "关" }));
+        s.commit_row(
+            &win,
+            idx.max(0) as usize,
+            format!("{} → {}", def(kind).title_zh, if on { "开" } else { "关" }),
+        );
     });
 
     let s = st.clone();
@@ -171,7 +178,8 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
     win.on_set_accent(move |i| {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.theme = if i == 1 { Theme::WulingBlue } else { Theme::ValleyYellow };
-        s.commit(&win, "强调色已更新".into());
+        s.paint_palette(&win);
+        s.commit_ui(&win, "强调色已更新".into());
     });
     let s = st.clone();
     let w = weak.clone();
@@ -183,7 +191,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
             _ => BlurMode::Solid,
         };
         s.apply_backdrop(&win);
-        s.commit(&win, "背景模式已更新".into());
+        s.commit_ui(&win, "背景模式已更新".into());
     });
     let s = st.clone();
     let w = weak.clone();
@@ -196,7 +204,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
             _ => Speed::Off,
         };
         s.paint_palette(&win);
-        s.commit(&win, "动效已更新".into());
+        s.commit_ui(&win, "动效已更新".into());
     });
     let s = st.clone();
     let w = weak.clone();
@@ -204,23 +212,21 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.decoration = i.clamp(0, 3) as u8;
         s.paint_palette(&win);
-        s.commit(&win, "装饰强度已更新".into());
+        s.commit_ui(&win, "装饰强度已更新".into());
     });
     let s = st.clone();
     let w = weak.clone();
     win.on_set_frame(move |i| {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.native_frame = i == 1;
-        // 换边框要重建窗口样式，Slint 在下一次显示时才会应用；先把属性推过去。
-        s.sync(&win);
-        s.commit(&win, format!("窗口边框 → {}", if i == 1 { "系统标题栏" } else { "无边框" }));
+        s.commit_ui(&win, format!("窗口边框 → {}", if i == 1 { "系统标题栏" } else { "无边框" }));
     });
     let s = st.clone();
     let w = weak.clone();
     win.on_set_top_bar_dim(move |on| {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.top_bar_dim = on;
-        s.commit(&win, format!("顶栏压暗 → {}", if on { "开" } else { "关" }));
+        s.commit_ui(&win, format!("顶栏压暗 → {}", if on { "开" } else { "关" }));
     });
     let s = st.clone();
     let w = weak.clone();
@@ -228,7 +234,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.corner_rounded = on;
         s.paint_palette(&win);
-        s.commit(&win, format!("圆角 → {}", if on { "开" } else { "关" }));
+        s.commit_ui(&win, format!("圆角 → {}", if on { "开" } else { "关" }));
     });
     let s = st.clone();
     let w = weak.clone();
@@ -237,8 +243,9 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let pct = (v * 100.0).round().clamp(0.0, 100.0) as u8;
         s.cfg.borrow_mut().audio.volume = pct;
         win.set_volume_text(SharedString::from(format!("{pct}%")));
+        // Every tick of the slider used to re-resolve all eight files and rebuild
+        // the table, which is what made dragging the whole window lag behind.
         s.save();
-        s.refresh_rows(&win);
     });
     let s = st.clone();
     let w = weak.clone();
@@ -262,7 +269,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
     win.on_set_prelogon(move |on| {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().runtime.experimental_prelogon = on;
-        s.commit(
+        s.commit_ui(
             &win,
             format!(
                 "登录界面播报 → {}（需要服务已注册）",
@@ -278,7 +285,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let shown = picked.display().to_string();
         s.cfg.borrow_mut().ui.backdrop = shown.clone();
         s.apply_backdrop(&win);
-        s.commit(&win, format!("背景图片 → {}", file_name(&shown)));
+        s.commit_ui(&win, format!("背景图片 → {}", file_name(&shown)));
     });
     let s = st.clone();
     let w = weak.clone();
@@ -286,7 +293,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.backdrop = String::new();
         s.apply_backdrop(&win);
-        s.commit(&win, "背景图片 → 跟随系统桌面壁纸".into());
+        s.commit_ui(&win, "背景图片 → 跟随系统桌面壁纸".into());
     });
     let s = st.clone();
     let w = weak.clone();
@@ -367,7 +374,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         let Some(win) = w.upgrade() else { return };
         s.cfg.borrow_mut().ui.tray = on;
         win.set_tray_on(on);
-        s.commit(
+        s.commit_ui(
             &win,
             format!(
                 "托盘常驻 → {}（{}）",
@@ -496,27 +503,41 @@ impl State {
         pal.set_radius(radius);
     }
 
-    fn refresh_rows(&self, win: &MainWindow) {
+    /// One row of the event table, resolved against the disk.
+    fn row_at(&self, idx: usize) -> Option<EventRow> {
+        let d = EVENTS.get(idx)?;
         let cfg = self.cfg.borrow();
         let zh = cfg.ui.language == eds_core::config::Language::Zh;
-        let rows: Vec<EventRow> = EVENTS
-            .iter()
-            .map(|d| {
-                let r = resolve::resolve(&cfg, &self.paths, d.kind);
-                EventRow {
-                    id: SharedString::from(d.kind.id()),
-                    title: SharedString::from(if zh { d.title_zh } else { d.title_en }),
-                    hint: SharedString::from(if zh { d.hint_zh } else { d.hint_en }),
-                    enabled: cfg.is_enabled(d.kind),
-                    status: SharedString::from(r.status.label()),
-                    ok: r.status.is_ok(),
-                    source: SharedString::from(r.source.map(|s| s.label()).unwrap_or("—")),
-                    file: SharedString::from(r.file_name()),
-                    container: SharedString::from(r.container.label()),
-                }
-            })
-            .collect();
-        win.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+        let r = resolve::resolve(&cfg, &self.paths, d.kind);
+        Some(EventRow {
+            id: SharedString::from(d.kind.id()),
+            title: SharedString::from(if zh { d.title_zh } else { d.title_en }),
+            hint: SharedString::from(if zh { d.hint_zh } else { d.hint_en }),
+            enabled: cfg.is_enabled(d.kind),
+            status: SharedString::from(r.status.label()),
+            ok: r.status.is_ok(),
+            source: SharedString::from(r.source.map(|s| s.label()).unwrap_or("—")),
+            file: SharedString::from(r.file_name()),
+            container: SharedString::from(r.container.label()),
+        })
+    }
+
+    fn refresh_rows(&self, win: &MainWindow) {
+        let rows: Vec<EventRow> = (0..EVENTS.len()).filter_map(|i| self.row_at(i)).collect();
+        let model = Rc::new(VecModel::from(rows));
+        win.set_rows(ModelRc::from(model.clone()));
+        *self.rows.borrow_mut() = Some(model);
+    }
+
+    /// Replacing the whole model rebuilds all eight delegates, which is what made
+    /// a single switch feel slow to answer. Only that row changes here.
+    fn refresh_row(&self, win: &MainWindow, idx: usize) {
+        let Some(row) = self.row_at(idx) else { return };
+        let model = self.rows.borrow().clone();
+        match model {
+            Some(model) => model.set_row_data(idx, row),
+            None => self.refresh_rows(win),
+        }
     }
 
     fn save(&self) {
@@ -526,6 +547,7 @@ impl State {
         }
     }
 
+    /// Audio or layout changed: every row has to be re-resolved.
     fn commit(&self, win: &MainWindow, msg: String) {
         self.save();
         let cfg = self.cfg.borrow();
@@ -534,6 +556,24 @@ impl State {
         self.status(win, format!("{msg} · 已提交（就绪 {ok}/{total}）"), false);
         self.sync(win);
         self.refresh_rows(win);
+    }
+
+    /// One event's switch flipped: same numbers, one row redrawn.
+    fn commit_row(&self, win: &MainWindow, idx: usize, msg: String) {
+        self.save();
+        let cfg = self.cfg.borrow();
+        let (ok, total) = resolve::readiness(&cfg, &self.paths);
+        drop(cfg);
+        self.status(win, format!("{msg} · 已提交（就绪 {ok}/{total}）"), false);
+        self.sync(win);
+        self.refresh_row(win, idx);
+    }
+
+    /// Appearance changed: nothing on disk can have moved, so do not look.
+    fn commit_ui(&self, win: &MainWindow, msg: String) {
+        self.save();
+        self.status(win, format!("{msg} · 已保存"), false);
+        self.sync(win);
     }
 
     /// 纯色 / 壁纸副本 / 实时模糊. Capture failures degrade to 纯色 quietly,
@@ -565,6 +605,11 @@ impl State {
                 let t = Timer::default();
                 let _ = t.start(TimerMode::Repeated, Duration::from_millis(2000), move || {
                     let Some(win) = weak.upgrade() else { return };
+                    // Hidden in the tray: grabbing the desktop for a window nobody
+                    // can see is the whole idle cost of this process.
+                    if !win.window().is_visible() {
+                        return;
+                    }
                     if let Some(img) = crate::platform::blurred_wallpaper() {
                         win.set_wallpaper(img);
                     }
