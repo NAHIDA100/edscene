@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/eds-core", "crates/eds-linux", "crates/eds-app"]
+members = ["crates/eds-core", "crates/eds-linux", "crates/eds-app", "crates/eds-setup"]
 exclude = ["vendor"]
 
 [workspace.package]
