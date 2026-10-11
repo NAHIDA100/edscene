@@ -62,6 +62,22 @@ cargo build --release --workspace
 服务相关的命令需要管理员，建议直接开一个提升过的终端跑
 `target\release\edscene.exe --install-service`。
 
+## 出安装程序（setup.exe）
+
+```powershell
+cargo build --release                       # 顺带把 eds-setup 也编出来
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\pack.ps1 `
+  -Assets "D:\works\eds" -Background "C:/path/to/picture.jpg" -Out "D:\works\edscene-dist"
+```
+
+`pack.ps1` 最后会调 `edscene-setup.exe --pack <暂存目录> <安装器> <setup.exe>`，
+把暂存目录整棵树追加到安装器尾部（页脚 `EDSPAY01`），所以素材永远只在二进制里，
+不进仓库。安装器自己约 680 KB，加上载荷约 20 MB。
+
+想在不碰系统的前提下验一遍载荷：`setup.exe --silent --elevated --yes --dir <临时目录>`
+会在缺少管理员权限时直接退出（不会写到 Program Files，也不会弹第二次 UAC）；
+`cargo test -p eds-setup` 覆盖载荷的读写与路径穿越拒绝。
+
 ## 交叉检查 Linux 代码
 
 应用层（拉了 cpal/alsa）没法在 Windows 上交叉编译，但 `eds-linux`
@@ -108,3 +124,4 @@ python scripts\check_repo_hygiene.py --all
 | zbus | 5.x | 需要 `async-io`（默认 feature）+ `blocking-api`；只关 `default-features` 会编译期报错 |
 | windows | 0.62 | WTS 函数在 `Win32::System::RemoteDesktop`（不是 TerminalServices），GUID 在 `System::SystemServices`，`CreateEnvironmentBlock` 在 `System::Environment` |
 | windows-service | 0.8.1 | `ServiceStartType::AutoStart`，`ServiceControlHandlerResult` 在 `service_control_handler` 模块里 |
+| eds-setup 用的 windows API | 0.62 | `GetTokenInformation` / `TOKEN_ELEVATION` 在 `Win32::Security`（不是 `System::Security`）；crate 里没有导出 `CLSID_ShellLink`，要自己用 `GUID::from_u128(0x00021401-…-000000000046)`；`ShellExecuteW` 返回 `HINSTANCE`，值 ≤32 才是失败（1223 = 用户点了"否"）|

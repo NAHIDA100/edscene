@@ -12,7 +12,7 @@ translucent bands, 45° hatch, white pill controls, `//设置` header,
 > **No game assets are included.** The repository contains no audio, no images,
 > no fonts and no installers. The app stays silent until you point it at a
 > sound pack of your own. Not affiliated with, endorsed by, or connected to
-> Hypergryph / Mountain Contour / Yostar.
+> Hypergryph; every related name, mark and artwork belongs to its own rights holder.
 
 Full documentation is in [`README.md`](README.md); this file is the short route.
 

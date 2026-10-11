@@ -1,5 +1,17 @@
 # Linux 安装
 
+> **产物从哪来**：Linux 的 `.deb` 与 `.tar.gz` 由 CI 在打 tag 时构建并挂到 Release 附件
+> （`.github/workflows/release.yml` 里的 `linux-x64` 作业）。仓库不放任何编译产物，
+> 源码包里没有 ELF，所以拿二进制有两条路：推一个 `v*` tag 让 CI 出包，或者在任意 amd64
+> Linux 上自己编一次：
+>
+> ```sh
+> sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev \
+>   libdbus-1-dev libfontconfig1-dev libxkbcommon-dev
+> cargo build --release -p eds-app          # → target/release/edscene
+> VERSIONED=0.1.0 ./packaging/build-deb.sh target/release/edscene edscene_0.1.0_amd64.deb
+> ```
+
 ## 装包
 
 ```sh
