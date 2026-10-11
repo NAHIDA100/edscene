@@ -132,8 +132,10 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn new(cfg: &Config, out: std::sync::Arc<dyn Broadcast>) -> Pipeline {
+        let mut d = Dispatcher::new(cfg.dispatch_config(), log::mono_ms());
+        d.set_machine_uptime(crate::platform::uptime_ms());
         Pipeline {
-            inner: Mutex::new(Dispatcher::new(cfg.dispatch_config(), log::mono_ms())),
+            inner: Mutex::new(d),
             out,
             seq: AtomicU64::new(0),
         }

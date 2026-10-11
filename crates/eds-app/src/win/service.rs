@@ -422,10 +422,12 @@ fn supervise(
     let server = Server::start()?;
     let mut cfg = load_at(paths);
     let mut disp = Dispatcher::new(cfg.dispatch_config(), log::mono_ms());
+    disp.set_machine_uptime(crate::platform::uptime_ms());
     let mut seq: u64 = 0;
     let mut last_cfg = mtime(&paths.config);
     let mut last_cfg_load = Instant::now();
     let mut poll = Duration::from_millis(cfg.runtime.power_poll_ms.max(500));
+    let mut queued: Vec<(u32, Msg, Instant)> = Vec::new();
 
     // A user may already be logged in when the service starts (install, or a
     // late start after boot), so greet the console session immediately.
@@ -448,10 +450,10 @@ fn supervise(
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         };
         while let Ok(more) = sig_rx.try_recv() {
-            deliver(&mut disp, &server, &cfg, more, &mut seq, &mut agents, paths);
+            deliver(&mut disp, &server, &cfg, more, &mut seq, &mut agents, &mut queued, paths);
         }
         if let Some(s) = sig {
-            deliver(&mut disp, &server, &cfg, s, &mut seq, &mut agents, paths);
+            deliver(&mut disp, &server, &cfg, s, &mut seq, &mut agents, &mut queued, paths);
         }
         while let Ok(ev) = server.events.try_recv() {
             match ev {
@@ -463,6 +465,7 @@ fn supervise(
                         &paths.state_dir,
                         &serde_json::json!({"ev": "agent", "session": session, "pid": pid}),
                     );
+                    flush(&server, session, &mut queued, paths);
                 }
                 ServiceEvent::AgentGone { session } => {
                     agents.retain(|s| *s != session);
@@ -479,10 +482,45 @@ fn supervise(
                 last_cfg = m;
                 cfg = load_at(paths);
                 // Keep what we learned about the power state; take the new rules.
-                disp = Dispatcher::with_snapshot(cfg.dispatch_config(), log::mono_ms(), disp.snapshot());
+                disp.reload_config(cfg.dispatch_config());
                 poll = Duration::from_millis(cfg.runtime.power_poll_ms.max(500));
                 log::write(&paths.state_dir, &serde_json::json!({"ev": "config-reload"}));
             }
+        }
+        // Nobody turned up to play it: stop holding it.
+        queued.retain(|(_, _, at)| at.elapsed() < QUEUE_TTL);
+    }
+}
+
+/// A broadcast whose session had no player yet. The agent needs a moment to
+/// start, and the boot announcement is exactly the one that races it.
+const QUEUE_TTL: Duration = Duration::from_secs(8);
+
+fn flush(
+    server: &Server,
+    session: u32,
+    queued: &mut Vec<(u32, Msg, Instant)>,
+    paths: &eds_core::Paths,
+) {
+    while let Some(i) = queued.iter().position(|(s, _, _)| *s == session) {
+        let (_, msg, at) = queued.remove(i);
+        if at.elapsed() >= QUEUE_TTL {
+            continue;
+        }
+        let kind = match &msg {
+            Msg::Event { kind, .. } => *kind,
+            _ => continue,
+        };
+        match server.send(Cmd::ToSession(session, msg)) {
+            Ok(()) => log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "flush", "kind": kind.id(), "session": session,
+                                    "late_ms": at.elapsed().as_millis()}),
+            ),
+            Err(e) => log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "send-fail", "kind": kind.id(), "err": e}),
+            ),
         }
     }
 }
@@ -541,6 +579,7 @@ fn deliver(
     sig: Signal,
     seq: &mut u64,
     agents: &mut Vec<u32>,
+    queued: &mut Vec<(u32, Msg, Instant)>,
     paths: &eds_core::Paths,
 ) {
     // A logon means there is now a token to launch the player with.
@@ -567,7 +606,7 @@ fn deliver(
             _ => console_session(),
         };
         // The hub drops a ToSession silently when that session has no player,
-        // so say which case this was instead of leaving no trace at all.
+        // so hold it instead: the boot announcement always loses that race.
         let attached = agents.contains(&session);
         let msg = Msg::Event {
             kind,
@@ -575,6 +614,15 @@ fn deliver(
             session,
             at_ms: now,
         };
+        if !attached {
+            queued.push((session, msg, Instant::now()));
+            log::write(
+                &paths.state_dir,
+                &serde_json::json!({"ev": "queued", "kind": kind.id(), "seq": *seq,
+                                    "session": session}),
+            );
+            continue;
+        }
         match server.send(Cmd::ToSession(session, msg)) {
             Ok(()) => log::write(
                 &paths.state_dir,
@@ -628,10 +676,18 @@ fn console_session() -> u32 {
 }
 
 fn load_at(paths: &eds_core::Paths) -> Config {
-    Config::load(&paths.config)
+    let mut cfg = Config::load(&paths.config)
         .ok()
         .flatten()
-        .unwrap_or_else(Config::factory)
+        .unwrap_or_else(Config::factory);
+    // Nobody has opened the settings window yet on a fresh install, but the
+    // sound pack is already lying beside the exe: use it rather than sit mute.
+    if cfg.sounds.dir.is_empty() {
+        if let Some(dir) = crate::paths::shipped_sounds() {
+            cfg.sounds.dir = dir.display().to_string();
+        }
+    }
+    cfg
 }
 
 fn mtime(p: &Path) -> Option<std::time::SystemTime> {

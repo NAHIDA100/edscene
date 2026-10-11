@@ -94,10 +94,23 @@ pub struct Dispatcher {
     suspended: bool,
     /// Power observations before the first one only seed state, they never fire.
     power_seeded: bool,
+    /// Milliseconds of "still booting" left, measured on this clock. The service
+    /// shortens it by the machine uptime, so a service installed three hours
+    /// after boot no longer treats the next logon as a boot.
+    boot_phase_ms: u64,
+    /// Until when a Lock/Unlock pair is just the logon animation rather than the
+    /// user locking their screen. See [`BOOT_DANCE_MS`].
+    boot_dance_until_ms: u64,
 }
+
+/// Windows plays Logon, then Lock, then Unlock while building the desktop, all
+/// inside a couple of seconds. That dance must not become a 锁屏 + 解锁 pair of
+/// broadcasts, so it is swallowed for this long after the boot logon.
+pub const BOOT_DANCE_MS: u64 = 10_000;
 
 impl Dispatcher {
     pub fn new(cfg: DispatchConfig, now_ms: u64) -> Self {
+        let boot_phase_ms = cfg.boot_grace_ms;
         Dispatcher {
             cfg,
             t0_ms: now_ms,
@@ -110,6 +123,8 @@ impl Dispatcher {
             prev_saver: None,
             suspended: false,
             power_seeded: false,
+            boot_phase_ms,
+            boot_dance_until_ms: 0,
         }
     }
 
@@ -117,19 +132,30 @@ impl Dispatcher {
         self.st
     }
 
-    /// Rebuild after a config reload without forgetting what has already been
-    /// observed, so editing a threshold cannot re-trigger a boot or logon event.
-    pub fn with_snapshot(cfg: DispatchConfig, now_ms: u64, snap: Snapshot) -> Dispatcher {
-        Dispatcher {
-            cfg,
-            t0_ms: now_ms,
-            st: snap,
-            last_fire_ms: [None; 8],
-            prev_on_ac: snap.on_ac,
-            prev_saver: snap.saver,
-            suspended: false,
-            power_seeded: true,
-        }
+    /// Take new rules without forgetting anything else. Rebuilding the
+    /// dispatcher instead would reset the boot clock, and a reload happening
+    /// during the logon animation would then re-broadcast the boot.
+    pub fn reload_config(&mut self, cfg: DispatchConfig) {
+        self.boot_phase_ms = self.boot_phase_ms.min(cfg.boot_grace_ms);
+        self.cfg = cfg;
+    }
+
+    /// Tell the dispatcher how long the machine had already been up when this
+    /// process started. Without it, a service started by hand hours after boot
+    /// would read the next logon as "开机进入桌面".
+    pub fn set_machine_uptime(&mut self, uptime_ms: u64) {
+        self.boot_phase_ms = self.cfg.boot_grace_ms.saturating_sub(uptime_ms);
+    }
+
+    /// Still inside the window where a logon means "the machine just booted".
+    fn in_boot_phase(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.t0_ms) <= self.boot_phase_ms
+    }
+
+    /// The logon animation swallows Lock/Unlock only briefly, so a genuine
+    /// lock a minute later is still a genuine broadcast.
+    fn in_boot_dance(&self, now_ms: u64) -> bool {
+        now_ms.saturating_sub(self.t0_ms) <= self.boot_dance_until_ms
     }
 
     /// Called by a process that starts *after* the user is already at the
@@ -164,7 +190,10 @@ impl Dispatcher {
                 self.st.display_on = Some(true);
                 if !self.st.first_logon_seen {
                     self.st.first_logon_seen = true;
-                    if now_ms.saturating_sub(self.t0_ms) <= self.cfg.boot_grace_ms {
+                    if self.in_boot_phase(now_ms) {
+                        // One broadcast for the whole logon: the Lock/Unlock the
+                        // OS sends next belongs to this same moment.
+                        self.boot_dance_until_ms = now_ms.saturating_add(BOOT_DANCE_MS);
                         out.push(EventKind::BootDesktop);
                     } else {
                         out.push(EventKind::Unlock);
@@ -177,7 +206,10 @@ impl Dispatcher {
             Signal::Unlock { session } => {
                 self.st.session = Some(session);
                 self.st.display_on = Some(true);
-                if self.st.locked != Some(false) {
+                if self.in_boot_dance(now_ms) {
+                    self.boot_dance_until_ms = 0;
+                    self.st.locked = Some(false);
+                } else if self.st.locked != Some(false) {
                     self.st.locked = Some(false);
                     out.push(EventKind::Unlock);
                 }
@@ -185,7 +217,9 @@ impl Dispatcher {
             Signal::Lock { .. } => {
                 if self.st.locked != Some(true) {
                     self.st.locked = Some(true);
-                    out.push(EventKind::Lock);
+                    if !self.in_boot_dance(now_ms) {
+                        out.push(EventKind::Lock);
+                    }
                 }
             }
             Signal::Logoff { session } => {
@@ -200,7 +234,10 @@ impl Dispatcher {
                 self.st.display_on = Some(true);
                 // After a lock the OS always sends Unlock too; only use this as
                 // a fallback when we never saw the lock state clear.
-                if self.st.locked == Some(true) {
+                if self.in_boot_dance(now_ms) {
+                    self.boot_dance_until_ms = 0;
+                    self.st.locked = Some(false);
+                } else if self.st.locked == Some(true) {
                     self.st.locked = Some(false);
                     out.push(EventKind::Unlock);
                 }
@@ -311,6 +348,49 @@ mod tests {
     }
 
     #[test]
+    fn the_boot_logon_animation_is_not_a_lock_unlock_pair() {
+        let mut x = d();
+        assert_eq!(
+            x.apply(Signal::Logon { session: 1 }, 4_000),
+            vec![EventKind::BootDesktop]
+        );
+        // What Windows really sends while building the desktop.
+        assert!(x.apply(Signal::Lock { session: 1 }, 5_000).is_empty());
+        assert!(x.apply(Signal::Unlock { session: 1 }, 6_000).is_empty());
+        assert!(x
+            .apply(Signal::ConsoleConnect { session: 1 }, 7_000)
+            .is_empty());
+        // Once the animation is over a real lock/unlock is a real broadcast.
+        assert_eq!(x.apply(Signal::Lock { session: 1 }, 30_000), vec![EventKind::Lock]);
+        assert_eq!(
+            x.apply(Signal::Unlock { session: 1 }, 40_000),
+            vec![EventKind::Unlock]
+        );
+    }
+
+    #[test]
+    fn uptime_shortens_the_boot_window() {
+        let mut x = d();
+        x.set_machine_uptime(3_600_000);
+        assert_eq!(
+            x.apply(Signal::Logon { session: 1 }, 1_000),
+            vec![EventKind::Unlock]
+        );
+    }
+
+    #[test]
+    fn reloading_config_neither_replays_the_boot_nor_ends_the_animation() {
+        let mut x = d();
+        assert_eq!(
+            x.apply(Signal::Logon { session: 1 }, 4_000),
+            vec![EventKind::BootDesktop]
+        );
+        x.reload_config(DispatchConfig::default());
+        assert!(x.apply(Signal::Lock { session: 1 }, 5_000).is_empty());
+        assert!(x.apply(Signal::Unlock { session: 1 }, 6_000).is_empty());
+    }
+
+    #[test]
     fn unlock_only_fires_on_a_real_locked_to_unlocked_edge() {
         let mut x = d();
         x.apply(Signal::Logon { session: 1 }, 1_000);
@@ -323,7 +403,7 @@ mod tests {
     #[test]
     fn console_connect_unlocks_but_never_double_fires_with_unlock() {
         let mut x = d();
-        x.apply(Signal::Logon { session: 1 }, 1_000);
+        x.assume_desktop();
         x.apply(Signal::Lock { session: 1 }, 5_000);
         assert_eq!(
             x.apply(Signal::ConsoleConnect { session: 1 }, 9_000),
@@ -417,7 +497,7 @@ mod tests {
     #[test]
     fn cooldown_throttles_repeats_but_not_the_state_machine() {
         let mut x = d();
-        x.apply(Signal::Logon { session: 1 }, 1_000);
+        x.assume_desktop();
         assert_eq!(x.apply(Signal::Lock { session: 1 }, 2_000), vec![EventKind::Lock]);
         assert_eq!(x.apply(Signal::Unlock { session: 1 }, 3_000), vec![EventKind::Unlock]);
         // Both edges are still tracked...

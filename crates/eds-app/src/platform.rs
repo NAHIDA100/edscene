@@ -7,6 +7,23 @@ pub fn native_drag(native_frame: bool) -> bool {
     cfg!(windows) && !native_frame
 }
 
+/// How long the machine has been up. The dispatcher needs it to tell a logon
+/// that means "just booted" from one that means "somebody sat down again", even
+/// when this process started hours after the boot.
+#[cfg(windows)]
+pub fn uptime_ms() -> u64 {
+    unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
+}
+
+#[cfg(not(windows))]
+pub fn uptime_ms() -> u64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split('.').next()?.parse::<f64>().ok())
+        .map(|s| (s * 1_000.0) as u64)
+        .unwrap_or(0)
+}
+
 #[cfg(windows)]
 pub fn set_autostart(on: bool) -> Result<(), String> {
     crate::win::service::set_autostart(on)
