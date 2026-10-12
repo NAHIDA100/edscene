@@ -27,6 +27,13 @@ pub fn safe_relpath(name: &str) -> Option<PathBuf> {
     if name.is_empty() || name.contains('\0') {
         return None;
     }
+    // 载荷里的名字一律用 `/` 分隔（collect 就是这么写的）。因此出现反斜杠、开头的
+    // 斜杠或盘符冒号，就说明这是从别的平台抄来的绝对路径 —— 例如 Windows 的 UNC
+    // `\\server\share`，而 `Path` 在非 Windows 上只把它当成一个怪文件名，has_root
+    // 是 false。这道闸跑在管理员权限下，不能依赖宿主平台怎么看这条字符串。
+    if name.contains('\\') || name.starts_with('/') || name.contains(':') {
+        return None;
+    }
     let p = Path::new(name);
     if p.is_absolute() || p.has_root() {
         return None;
@@ -36,7 +43,7 @@ pub fn safe_relpath(name: &str) -> Option<PathBuf> {
         match c {
             Component::Normal(seg) => {
                 let s = seg.to_string_lossy();
-                if s.contains(':') || is_reserved(&s) {
+                if is_reserved(&s) {
                     return None;
                 }
                 out.push(s.as_ref());
