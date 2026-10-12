@@ -58,7 +58,7 @@ jobs:
         run: |
           VER="${GITHUB_REF_NAME:-0.0.0-ci}"
           case "$GITHUB_REF" in refs/tags/*) ;; *) VER="0.0.0-ci";; esac
-          VERSIONED="$VER" ./packaging/build-deb.sh "target/${{ matrix.target }}/release/edscene" "edscene-$VER-linux-x64.deb"
+          VERSIONED="$VER" bash packaging/build-deb.sh "target/${{ matrix.target }}/release/edscene" "edscene-$VER-linux-x64.deb"
           tar -C "target/${{ matrix.target }}/release" -czf "edscene-$VER-linux-x64.tar.gz" edscene
           ls -la
       - uses: actions/upload-artifact@v4
