@@ -25,6 +25,7 @@ pub fn soften_path(path: &Path) -> Option<slint::Image> {
 }
 
 /// A 32-bit GDI grab is BGRA, which is not the order the box passes expect.
+#[cfg(windows)]
 pub fn from_bgra(bgra: &[u8], w: usize, h: usize) -> Option<slint::Image> {
     soften(bgra.to_vec(), w, h, 8, Order::Bgra)
 }

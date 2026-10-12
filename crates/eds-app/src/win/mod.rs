@@ -143,7 +143,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
-/// Run the provider until [`request_stop`] is called.
+/// Run the provider until the console control handler asks it to stop.
 pub fn run_provider(cfg: &Config, out: Arc<dyn Broadcast>, verbose: bool) -> Result<(), String> {
     let pipe = Arc::new(Pipeline::new(cfg, out));
     pipe.assume_desktop();

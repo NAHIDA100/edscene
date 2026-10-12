@@ -45,6 +45,7 @@ fn run_provider(cfg: &Config, out: Arc<dyn Broadcast>, verbose: bool) -> Result<
             if buses.user.is_some() { "已连接" } else { "不可用（屏保事件将静默）" }
         );
     }
+    install_stop_handlers();
     let (tx, rx) = std::sync::mpsc::channel::<eds_core::Signal>();
     std::thread::Builder::new()
         .name("edscene-dbus".into())
@@ -57,24 +58,45 @@ fn run_provider(cfg: &Config, out: Arc<dyn Broadcast>, verbose: bool) -> Result<
             }
         })
         .map_err(|e| e.to_string())?;
-    while let Ok(sig) = rx.recv() {
-        let at = log::mono_ms();
-        if verbose {
-            println!("[{at:>9} ms] {sig:?}");
-        }
-        for k in pipe.feed(sig, at) {
-            if verbose {
-                println!("            ↳ 播报 {}", def(k).title_zh);
+    while !STOPPED.load(Ordering::Relaxed) {
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(sig) => {
+                let at = log::mono_ms();
+                if verbose {
+                    println!("[{at:>9} ms] {sig:?}");
+                }
+                for k in pipe.feed(sig, at) {
+                    if verbose {
+                        println!("            ↳ 播报 {}", def(k).title_zh);
+                    }
+                }
             }
+            // 超时不是错误：它就是让上面那个条件有机会变假。
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
+    }
+    if verbose {
+        println!("收到退出信号，停止监听。");
     }
     Ok(())
 }
 
 static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn request_stop() {
-    STOPPED.store(true, Ordering::Relaxed);
+/// Ctrl+C、关终端和 `systemctl stop` 都走同一条退出路径。信号处理函数里只做
+/// "置一个原子布尔"这一件异步信号安全的事，真正的收尾留在主循环。
+fn install_stop_handlers() {
+    extern "C" fn on_signal(_sig: i32) {
+        STOPPED.store(true, Ordering::Relaxed);
+    }
+    extern "C" {
+        fn signal(signum: i32, handler: *const ()) -> *const ();
+    }
+    // SIGHUP / SIGINT / SIGTERM
+    for signum in [1, 2, 15] {
+        unsafe { signal(signum, on_signal as *const ()) };
+    }
 }
 
 fn spawn_config_watch(p: Paths, out: Arc<LocalBroadcast>) {

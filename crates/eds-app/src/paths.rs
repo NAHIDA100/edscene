@@ -74,6 +74,7 @@ pub fn machine_paths() -> Option<Paths> {
 
 /// Create the machine-wide tree. Only the service (LocalSystem) and
 /// `--install-service` (elevated) may call this.
+#[cfg(windows)]
 pub fn ensure_machine_paths() -> Option<Paths> {
     #[cfg(windows)]
     {

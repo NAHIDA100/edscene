@@ -97,7 +97,8 @@ rm -rf "$STAGE"
 
 if ((MAKE_DEB)); then
   say "打包 deb"
-  VERSIONED="$VERSION" ./packaging/build-deb.sh "$BIN" "edscene-$VERSION-linux-x64.deb"
+  # bash 而不是 ./：从 Windows 上解出来的压缩包不一定带执行位。
+  VERSIONED="$VERSION" bash packaging/build-deb.sh "$BIN" "edscene-$VERSION-linux-x64.deb"
 fi
 
 say "产物与校验和"

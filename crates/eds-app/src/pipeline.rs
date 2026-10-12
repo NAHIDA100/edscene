@@ -46,6 +46,7 @@ impl LocalBroadcast {
     }
 
     /// Re-read the config file, which the UI owns.
+    #[cfg(windows)]
     pub fn reload_config(&self) {
         if let Ok((cfg, _)) = crate::load_config(&self.paths) {
             self.set_config(cfg);
