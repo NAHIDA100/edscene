@@ -8,8 +8,17 @@
 > ```sh
 > sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev \
 >   libdbus-1-dev libfontconfig1-dev libxkbcommon-dev
-> cargo build --release -p eds-app          # → target/release/edscene
-> VERSIONED=0.1.0 ./packaging/build-deb.sh target/release/edscene edscene_0.1.0_amd64.deb
+> ./packaging/linux/build-linux.sh
+> ```
+>
+> 这条脚本只补缺失的系统依赖（`build-essential pkg-config libasound2-dev libdbus-1-dev
+> libfontconfig1-dev libxkbcommon-dev dpkg-dev`），没有 rustup 才装，国内网络走 rsproxy
+> 镜像，最后先 `cargo test --workspace` 再出 `edscene` / `.deb` / `.tar.gz` 与校验和。
+> 它在 Ubuntu 26.04（amd64）上实测跑通过。手动等价命令是：
+>
+> ```sh
+> cargo build --release -p eds-app
+> VERSIONED=0.1.0 bash packaging/build-deb.sh target/release/edscene edscene_0.1.0_amd64.deb
 > ```
 
 ## 装包

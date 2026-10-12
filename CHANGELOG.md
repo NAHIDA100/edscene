@@ -14,6 +14,9 @@
   载荷里的路径写文件前逐条校验，`..`、绝对路径、`CON` / `NUL` 这类保留名一律拒绝。
 - 服务读配置时也会自动采用安装目录旁的 `sounds\`：全新装完、一次设置窗口都没打开，
   也会出声。
+- `packaging/linux/build-linux.sh`：一条命令在任意 amd64 Ubuntu/Debian 上出
+  ELF + `.deb` + `.tar.gz`（只补缺失的系统依赖，没有 rustup 才装，国内走 rsproxy，
+  先测试后构建）。已在 Ubuntu 26.04 实机验证。
 
 ### 修复
 
@@ -33,6 +36,20 @@
   还没松 —— 正是之前"拖完界面失灵"的成因；而在无边框 + 透明窗口上它常常干脆不搬窗口。
   现在按下只记住抓握点，每次光标移动按绝对坐标搬一次，抬起照常归还给 Slint。代价是没有
   系统级的贴边吸附与双击最大化，需要那套就把「窗口边框」调回系统标题栏。
+- 一批只在真 Linux 上才暴露的缺陷（在 Ubuntu 26.04 虚拟机里编译并运行才发现）：
+  - `crates/eds-app/src/linux/mod.rs` 用了 `eds_core::Paths` 却没有导入，Linux 构建直接失败；
+  - 没有电池的桌面上 UPower 的 DisplayDevice 照样报 `Percentage: 0`，被当成真实电量 ——
+    现在先看 `IsPresent`，取不到时才用"插电且读数为 0"兜底；有电池的机器上 0 % 仍是真读数；
+  - 事件循环拿 `STOPPED` 当退出条件却没人置它，主循环又是 `recv()` 死等：补上
+    SIGHUP / SIGINT / SIGTERM 处理（处理函数里只置一个原子布尔）加 1 秒超时轮询，
+    Ctrl+C 与 `systemctl stop` 从此走同一条干净退出路径；
+  - 安装器的载荷守卫靠 `Path::has_root()` 判绝对路径，Windows 的 UNC 共享路径
+    在 Linux 上被放行 —— 这道闸跑在管理员权限下，改成与宿主平台无关的显式拒绝；
+  - 两个 `.sh` 在 git 里没有执行位（Windows 上的 git 不记录 +x），CI 的 Linux 作业会在
+    `build-deb.sh` 那一步"权限不够"；补上模式位并把调用改成 `bash` 兜底；
+  - deb 产物名与文档不一致（文档写 `edscene_0.1.0_amd64.deb`，实际出的是
+    `edscene-0.1.0-linux-x64.deb`），而且末尾那行 `sha256sum` 按旧名字通配，
+    deb 的校验和从来没被打印过。
 
 ## [0.1.0] - 2026-10-06
 
