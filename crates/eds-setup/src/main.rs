@@ -6,6 +6,10 @@
 //! accepted; the only elevated actions are copying into Program Files, service
 //! registration and the Start Menu entry.
 
+// 非 Windows 上这个二进制只是 --pack / --help 的外壳，安装流程整个不参与编译，
+// 所以那些只有 Windows 路径会碰到的辅助函数在这里必然是"未使用"。
+#![cfg_attr(not(windows), allow(dead_code, unreachable_code))]
+
 mod payload;
 
 use std::path::{Path, PathBuf};

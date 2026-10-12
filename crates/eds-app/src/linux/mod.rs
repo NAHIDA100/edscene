@@ -7,6 +7,7 @@ use crate::pipeline::{Broadcast, LocalBroadcast, NullBroadcast, Pipeline};
 use crate::{load_config, paths, Invocation};
 use eds_core::config::Config;
 use eds_core::presets::def;
+use eds_core::Paths;
 use eds_linux::{desktop, Buses, Feed};
 use std::path::{Path, PathBuf};
 use std::process::Command;
