@@ -625,7 +625,9 @@ mod tests {
         assert!(validate_sound_dir("D:\\works\\..\\eds", false).is_err());
         assert!(validate_sound_dir("\\\\nas\\pack", false).is_err());
         assert!(validate_sound_dir("\\\\nas\\pack", true).is_err(), "still must exist");
-        assert!(validate_sound_dir("C:\\Windows\\Fonts", false).is_ok());
+        // 样本换成"两边都存在"的目录：这条断言要验的是"绝对、存在、非穿越的路径
+        // 应当被接受"，写死 C:\Windows\Fonts 到了 Linux 上就只是不存在而已。
+        assert!(validate_sound_dir(env!("CARGO_MANIFEST_DIR"), false).is_ok());
     }
 
     #[test]
