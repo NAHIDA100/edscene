@@ -6,8 +6,6 @@
 > Linux 上自己编一次：
 >
 > ```sh
-> sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev \
->   libdbus-1-dev libfontconfig1-dev libxkbcommon-dev
 > ./packaging/linux/build-linux.sh
 > ```
 >
