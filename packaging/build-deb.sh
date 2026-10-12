@@ -55,7 +55,8 @@ Description: 明日方舟：终末地 风格的系统事件语音播报（同人
  AC adapter changes over D-Bus and plays a clip from a sound pack you supply.
  No game asset is included or redistributed; the package is useless until you
  run "edscene --sounds <folder>". Non-commercial fan work, not affiliated with
- Hypergryph / Mountain Contour / Yostar.
+ or endorsed by Hypergryph; every related name, mark and artwork belongs to
+ its own rights holder.
 EOF
 
 dpkg-deb --root-owner-group --build "$PKG" "$OUT"
