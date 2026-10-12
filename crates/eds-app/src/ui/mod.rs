@@ -451,7 +451,23 @@ impl State {
         win.set_top_bar_dim(cfg.ui.top_bar_dim);
         win.set_rounded(cfg.ui.corner_rounded);
         win.set_native_frame(cfg.ui.native_frame);
+        // Linux 上这个开关的真值是"单元在不在"：配置里那个 bool 只是意图，
+        // 出厂 autostart=true 但从未装过时，开关不能显示成"已开"。
+        #[cfg(windows)]
         win.set_autostart(cfg.runtime.autostart);
+        #[cfg(not(windows))]
+        win.set_autostart(crate::linux::unit_installed());
+        win.set_can_elevate(cfg!(windows));
+        win.set_autostart_where(SharedString::from(if cfg!(windows) {
+            "系统服务"
+        } else {
+            "systemd 用户单元"
+        }));
+        win.set_autostart_hint(SharedString::from(if cfg!(windows) {
+            "服务在输密码之前就已完成加载，事件由它统一判定；真正出声的是登录会话里的代理进程。改动需要管理员确认。"
+        } else {
+            "这是你账号下的 systemd 用户单元，不需要 root；登录桌面即启动，事件由它统一判定。想让它在登录之前就活着，终端执行 loginctl enable-linger。"
+        }));
         win.set_prelogon(cfg.runtime.experimental_prelogon);
         win.set_tray_on(cfg.ui.tray);
         win.set_sounds_dir(SharedString::from(cfg.sounds.dir.clone()));

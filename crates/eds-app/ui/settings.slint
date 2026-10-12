@@ -418,6 +418,10 @@ export component MainWindow inherits Window {
     in property <string> backdrop-name: "";
     in property <bool> status-bad: false;
     in property <bool> need-admin: false;
+    // 提权是 Windows 的概念；Linux 的自启是用户级 systemd 单元，不需要 root。
+    in property <bool> can-elevate: true;
+    in property <string> autostart-where: "系统服务";
+    in property <string> autostart-hint: "";
     in property <bool> native-drag: false;
     in property <bool> native-frame: true;
 
@@ -887,13 +891,13 @@ export component MainWindow inherits Window {
                         padding: 20px;
                         spacing: 6px;
                         Text {
-                            text: "开机自启 = 系统服务" + (root.service-ready ? "（已注册）" : "（未注册）");
+                            text: "开机自启 = " + root.autostart-where + (root.service-ready ? "（已注册）" : "（未注册）");
                             color: Palette.ink;
                             font-size: 13px;
                             font-weight: 600;
                         }
                         Text {
-                            text: "服务在输密码之前就已完成加载，事件由它统一判定；真正出声的是登录会话里的代理进程。改动需要管理员确认。";
+                            text: root.autostart-hint;
                             color: Palette.ink-soft;
                             font-size: 12px;
                             wrap: word-wrap;
@@ -959,7 +963,7 @@ export component MainWindow inherits Window {
             overflow: elide;
         }
     }
-    if root.need-admin: Rectangle {
+    if root.need-admin && root.can-elevate: Rectangle {
         x: 26px;
         y: root.height - 100px;
         width: 196px;

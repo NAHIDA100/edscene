@@ -33,6 +33,8 @@ const HELP: &str = r#"集成工业播报终端 edscene
   --service             以 Windows 服务身份运行（由服务控制管理器启动）
   --install-service     注册并启动开机自启服务（需要管理员）
   --uninstall-service   停止并移除服务
+  --autostart-on / --autostart-off
+                        开 / 关开机自启（Windows 改服务启动类型，Linux 写用户单元）
   --factory-reset       所有设置回到出厂状态，替换过的素材退回 .disabled
   --config-path         打印配置与素材目录
   --service-status      Windows：查看开机自启服务的状态
@@ -110,6 +112,8 @@ fn parse_args() -> Result<Invocation, String> {
             ("--factory-reset", "factory-reset"),
             ("--config-path", "config-path"),
             ("--service-status", "service-status"),
+            ("--autostart-on", "autostart-on"),
+            ("--autostart-off", "autostart-off"),
         ];
         if let Some((_, who)) = COMMANDS.iter().find(|(flag, _)| *flag == a.as_str()) {
             if inv.cmd.is_empty() {
@@ -249,6 +253,7 @@ fn run(inv: Invocation) -> Result<(), String> {
         "factory-reset" => factory_reset(&inv),
         "toggle" => toggle(&inv),
         "settings" => settings(&inv),
+        "autostart-on" | "autostart-off" => set_autostart_cli(inv.cmd.ends_with("-on")),
         "watch" | "agent" | "service" | "install-service" | "uninstall-service" | "service-status" => {
             platform(&inv)
         }
@@ -275,6 +280,18 @@ fn config_path(inv: &Invocation) -> Result<(), String> {
         println!("状态目录  {}", p.state_dir.display());
         println!("事件日志  {}", log::file(&p.state_dir).display());
     }
+    Ok(())
+}
+
+/// The GUI switch and the CLI have to do exactly the same thing, so each
+/// platform has one implementation of "autostart" and no second truth.
+fn set_autostart_cli(on: bool) -> Result<(), String> {
+    crate::platform::set_autostart(on)?;
+    println!(
+        "开机自启 → {}（{}）",
+        if on { "开" } else { "关" },
+        if cfg!(windows) { "服务启动类型" } else { "systemd 用户单元 + XDG autostart" }
+    );
     Ok(())
 }
 
