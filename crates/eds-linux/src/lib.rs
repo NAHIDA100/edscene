@@ -163,7 +163,7 @@ fn upower(conn: &Connection) -> Option<Power> {
         "org.freedesktop.UPower",
         "OnBattery",
     )?;
-    let percent = f64_prop(
+    let raw = f64_prop(
         conn,
         "org.freedesktop.UPower",
         "/org/freedesktop/UPower/devices/DisplayDevice",
@@ -171,7 +171,29 @@ fn upower(conn: &Connection) -> Option<Power> {
         "Percentage",
     )
     .map(|p| p.clamp(0.0, 100.0) as u8);
-    Some(Power { on_battery, percent })
+    let present = bool_prop(
+        conn,
+        "org.freedesktop.UPower",
+        "/org/freedesktop/UPower/devices/DisplayDevice",
+        "org.freedesktop.UPower.Device",
+        "IsPresent",
+    );
+    Some(Power {
+        percent: display_percent(present, on_battery, raw),
+        on_battery,
+    })
+}
+
+/// UPower 的 DisplayDevice 在**没有电池**的机器上照样存在，而且报
+/// `Percentage: 0`。照抄下去，桌面机会显示"电量 0 %"，而接了 UPS 之类的设备
+/// 一旦让 `OnBattery` 变真，就会被当成"电量低于 5 %"播一次。`IsPresent` 是
+/// 最直接的证据；拿不到时退回"插电且读数为 0"这个显然的组合。
+fn display_percent(present: Option<bool>, on_battery: bool, raw: Option<u8>) -> Option<u8> {
+    match present {
+        Some(false) => None,
+        None if raw == Some(0) && !on_battery => None,
+        _ => raw,
+    }
 }
 
 fn screensaver_active(conn: &Connection) -> Option<bool> {
@@ -273,3 +295,19 @@ pub fn is_wayland() -> bool {
         || std::env::var("XDG_SESSION_TYPE").unwrap_or_default() == "wayland"
 }
 
+#[cfg(test)]
+mod tests {
+    use super::display_percent;
+
+    #[test]
+    fn a_batteryless_desktop_is_not_reported_as_empty() {
+        // 没有电池时 UPower 的 DisplayDevice 仍然存在并报 Percentage: 0。
+        assert_eq!(display_percent(Some(false), false, Some(0)), None);
+        assert_eq!(display_percent(None, false, Some(0)), None);
+        // 有电池时照抄读数：0% 是真的快没电了。
+        assert_eq!(display_percent(Some(true), false, Some(0)), Some(0));
+        assert_eq!(display_percent(None, true, Some(0)), Some(0));
+        assert_eq!(display_percent(Some(true), true, Some(42)), Some(42));
+        assert_eq!(display_percent(None, false, None), None);
+    }
+}
