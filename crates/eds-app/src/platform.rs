@@ -86,12 +86,11 @@ pub fn backdrop(path: &str) -> Option<slint::Image> {
 
 #[cfg(windows)]
 pub mod drag {
-    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+    use windows::Win32::Foundation::{HWND, POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetAncestor, GetCursorPos, GetWindowRect, SendMessageW, SetWindowPos, WindowFromPoint,
-        GA_ROOT, HTCAPTION, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_NCLBUTTONDOWN,
+        GetAncestor, GetCursorPos, GetWindowRect, SetWindowPos, WindowFromPoint, GA_ROOT,
+        SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
     };
-    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 
     /// Where the cursor grabbed the window, in physical screen pixels. Keeping
     /// the offset absolute is what stops the window from lagging behind the
@@ -131,28 +130,8 @@ pub mod drag {
         Ok(Grab { hwnd, dx: p.x - r.left, dy: p.y - r.top })
     }
 
-    /// Let the window manager do the dragging: the classic borderless window
-    /// trick. `lParam` has to carry the cursor's screen position — pass zero and
-    /// Windows drags as though the pointer were at (0, 0), which looks exactly
-    /// like "nothing happens".
-    pub fn modal(g: &Grab) -> Result<(), String> {
-        let Some(p) = cursor() else {
-            return Err("拿不到光标位置".into());
-        };
-        let lp = (((p.y as u16 as u32) << 16) | (p.x as u16 as u32)) as isize;
-        unsafe {
-            ReleaseCapture().map_err(|e| format!("ReleaseCapture: {e}"))?;
-            SendMessageW(
-                g.hwnd,
-                WM_NCLBUTTONDOWN,
-                Some(WPARAM(HTCAPTION as usize)),
-                Some(LPARAM(lp)),
-            );
-        }
-        Ok(())
-    }
-
-    /// Fallback: move the window ourselves to wherever the cursor now is.
+    /// Move the window so the point under the finger stays under the finger:
+    /// both sides read absolute screen pixels, so it neither lags nor jumps.
     pub fn apply(g: &Grab) {
         let Some(p) = cursor() else { return };
         unsafe {
@@ -178,9 +157,6 @@ pub mod drag {
         }
     }
     pub fn begin() -> Result<Grab, String> {
-        Err("这个平台交给 WindowMoveArea".into())
-    }
-    pub fn modal(_: &Grab) -> Result<(), String> {
         Err("这个平台交给 WindowMoveArea".into())
     }
     pub fn apply(_: &Grab) {}

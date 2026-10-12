@@ -305,32 +305,18 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         }
     });
     let s = st.clone();
-    let w = weak.clone();
     win.on_drag_start(move || {
-        let Some(win) = w.upgrade() else { return };
-        let _ = &win;
-        // Every step lands in the log, because "拖不动" has at least three
-        // different causes and the user cannot tell them apart.
+        // Windows 的 WM_NCLBUTTONDOWN/HTCAPTION 那套"交给系统拖"的做法在这里行不通：
+        // 它会在 Slint 的事件回调里跑一个嵌套消息循环，鼠标抬起被系统吃掉，窗口于是
+        // 认为按键还没松（后续点击全部失灵）；无边框 + 透明窗口上它甚至不搬窗口。
+        // 所以按下只记住抓握点，移动由 drag-move 一格一格自己搬。
         match crate::platform::drag::begin() {
             Ok(g) => {
                 crate::log::write(
                     &s.paths.state_dir,
                     &serde_json::json!({"ev": "drag", "step": "begin", "what": g.describe()}),
                 );
-                match crate::platform::drag::modal(&g) {
-                    Ok(()) => crate::log::write(
-                        &s.paths.state_dir,
-                        &serde_json::json!({"ev": "drag", "step": "modal-ok"}),
-                    ),
-                    Err(e) => {
-                        // No window manager help: move it ourselves per event.
-                        crate::log::write(
-                            &s.paths.state_dir,
-                            &serde_json::json!({"ev": "drag", "step": "modal-fail", "err": e}),
-                        );
-                        *s.grab.borrow_mut() = Some(g);
-                    }
-                }
+                *s.grab.borrow_mut() = Some(g);
             }
             Err(e) => crate::log::write(
                 &s.paths.state_dir,
