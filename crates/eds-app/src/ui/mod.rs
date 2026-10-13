@@ -15,6 +15,32 @@ use std::time::Duration;
 
 slint::include_modules!();
 
+#[cfg(windows)]
+fn make_tray(win: &MainWindow) -> Result<crate::win::tray::Tray, String> {
+    let w = win.as_weak();
+    crate::win::tray::Tray::new(
+        move || {
+            if let Some(win) = w.upgrade() {
+                win.show().ok();
+            }
+        },
+        || { slint::quit_event_loop().ok(); },
+    )
+}
+
+#[cfg(not(windows))]
+fn make_tray(win: &MainWindow) -> Result<Tray, String> {
+    let tray = Tray::new().map_err(|e| e.to_string())?;
+    let w = win.as_weak();
+    tray.on_open(move || {
+        if let Some(win) = w.upgrade() {
+            win.show().ok();
+        }
+    });
+    tray.on_quit(|| { slint::quit_event_loop().ok(); });
+    Ok(tray)
+}
+
 /// 谷地黄 from the reference shot; 武陵蓝 is the user-supplied #35A8BB.
 const ACCENTS: [(u32, u32); 2] = [(0xF5FF01, 0x2A2C2E), (0x35A8BB, 0x08252A)];
 
@@ -48,7 +74,24 @@ impl State {
 }
 
 pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    let Some(instance) = crate::win::settings_instance::Instance::acquire(hidden)? else {
+        return Ok(());
+    };
     let win = MainWindow::new().map_err(|e| format!("无法创建窗口：{e}"))?;
+    #[cfg(windows)]
+    let _activation_timer = {
+        let w = win.as_weak();
+        let timer = Timer::default();
+        timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
+            if instance.show_requested() {
+                if let Some(win) = w.upgrade() {
+                    win.show().ok();
+                }
+            }
+        });
+        timer
+    };
     let st = Rc::new(State {
         cfg: RefCell::new(cfg),
         paths,
@@ -334,50 +377,40 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
     win.on_drag_end(move || {
         *s.grab.borrow_mut() = None;
     });
-    // The tray is what makes "close" mean "put it away" instead of "shut it
-    // down". Desktops without a notification area just keep the old behaviour.
-    let tray = Tray::new().ok();
-    let has_tray = tray.is_some();
-    if let Some(tray) = tray.as_ref() {
-        let w = weak.clone();
-        tray.on_open(move || {
-            if let Some(win) = w.upgrade() {
-                win.show().ok();
-            }
-        });
-        let t = tray.as_weak();
-        tray.on_quit(move || {
-            // Dropping the component at the end of `show` is what unhooks the
-            // icon; the weak upgrade only keeps this closure honest.
-            if t.upgrade().is_some() {
-                slint::quit_event_loop().ok();
-            }
-        });
+    let tray = Rc::new(RefCell::new(None));
+    if st.cfg.borrow().ui.tray {
+        match make_tray(&win) {
+            Ok(icon) => *tray.borrow_mut() = Some(icon),
+            Err(e) => st.status(&win, format!("托盘启动失败：{e}"), true),
+        }
     }
     let s = st.clone();
     let w = weak.clone();
+    let t = tray.clone();
     win.on_set_tray(move |on| {
         let Some(win) = w.upgrade() else { return };
+        if on && t.borrow().is_none() {
+            match make_tray(&win) {
+                Ok(icon) => *t.borrow_mut() = Some(icon),
+                Err(e) => {
+                    s.status(&win, format!("托盘启动失败：{e}"), true);
+                    return;
+                }
+            }
+        } else if !on {
+            t.borrow_mut().take();
+        }
         s.cfg.borrow_mut().ui.tray = on;
-        win.set_tray_on(on);
-        s.commit_ui(
-            &win,
-            format!(
-                "托盘常驻 → {}（{}）",
-                if on { "开" } else { "关" },
-                if on { "下次登录起服务会带上设置窗口" } else { "本次退出后不再常驻" }
-            ),
-        );
+        s.commit_ui(&win, format!("托盘常驻 → {}", if on { "开" } else { "关" }));
     });
-    // 系统标题栏的 × 也要"收进托盘"而不是销毁窗口：藏起来并告诉 Slint 别关，
-    // 不然托盘的「打开设置」就唤不回它了。
     {
         let w = weak.clone();
+        let t = tray.clone();
         win.window().on_close_requested(move || {
             if let Some(win) = w.upgrade() {
                 win.hide().ok();
             }
-            if has_tray {
+            if t.borrow().is_some() {
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
                 slint::quit_event_loop().ok();
@@ -386,21 +419,23 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         });
     }
     let w = weak.clone();
+    let t = tray.clone();
     win.on_close_window(move || {
         if let Some(win) = w.upgrade() {
             win.hide().ok();
         }
-        if !has_tray {
+        if t.borrow().is_none() {
             slint::quit_event_loop().ok();
         }
     });
 
-    if !hidden {
+    if !hidden || tray.borrow().is_none() {
         win.show().map_err(|e| format!("无法显示窗口：{e}"))?;
     }
     st.apply_backdrop(&win);
-    slint::run_event_loop().map_err(|e| e.to_string())?;
-    drop(tray);
+    // A hidden native tray must keep pumping messages while Explorer starts.
+    slint::run_event_loop_until_quit().map_err(|e| e.to_string())?;
+    tray.borrow_mut().take();
     // Remember the open tab for next time.
     let tab = win.get_tab().clamp(0, 2) as u8;
     let mut cfg = st.cfg.borrow_mut();

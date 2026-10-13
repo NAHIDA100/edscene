@@ -1,76 +1,63 @@
-﻿# Assemble the Windows release archives from a built tree.
-#
-#   powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\pack.ps1 `
-#       -Assets "D:\works\eds" -Background "C:\path\to\picture.jpg" -Out "D:\works\edscene-dist"
-#
-# Two archives and one single-file installer come out:
-#   edscene-<v>-windows-x64.zip          code + docs only (what CI can publish)
-#   edscene-setup-<v>-windows-x64.exe    setup.exe: installer with sounds + art inside
-#   edscene-setup-<v>-windows-x64.zip    that installer plus README and docs
-#
-# The assets are deliberately NOT in the repository: this script only ever
-# copies them from a directory you point at, so the fan artwork stays out of
-# version control while the download still works with zero setup.
-#
-# Keep this file ASCII-only: Windows PowerShell 5.1 reads .ps1 as ANSI.
-
 param(
     [string]$Assets = '',
     [string]$Background = '',
     [string]$Out = 'D:\works\edscene-dist',
     [string]$Exe = '',
-    [string]$Setup = '',
-    [string]$Version = '0.1.0'
+    [string]$Iscc = '',
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $src = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$pkg = Join-Path $Out "pkg\edscene-$Version-windows-x64"
-
-if ($Exe -eq '') { $exe = Join-Path $src 'target\release\edscene.exe' } else { $exe = $Exe }
-if (-not (Test-Path $exe)) { throw "先 cargo build --release：找不到 $exe" }
-
-New-Item -ItemType Directory -Force -Path $pkg | Out-Null
-Copy-Item $exe (Join-Path $pkg 'edscene.exe') -Force
-foreach ($f in 'README.md', 'README.en.md', 'CHANGELOG.md', 'LICENSE-code', 'LICENSE-content', 'NOTICE') {
-    Copy-Item (Join-Path $src $f) $pkg -Force
+if ($Version -eq '') {
+    $match = [regex]::Match((Get-Content (Join-Path $src 'Cargo.toml') -Raw), '(?m)^version\s*=\s*"([^"]+)"')
+    if (-not $match.Success) { throw 'Cannot read workspace version' }
+    $Version = $match.Groups[1].Value
 }
-New-Item -ItemType Directory -Force -Path (Join-Path $pkg 'docs') | Out-Null
-Copy-Item (Join-Path $src 'docs\*.md') (Join-Path $pkg 'docs') -Force
-Copy-Item (Join-Path $PSScriptRoot 'install.ps1') (Join-Path $pkg 'install.ps1') -Force
-Copy-Item (Join-Path $PSScriptRoot 'setup.bat') (Join-Path $pkg 'setup.bat') -Force
-
-if ($Assets -ne '') {
-    python (Join-Path $PSScriptRoot 'pack_sounds.py') $Assets (Join-Path $pkg 'sounds')
-    if ($LASTEXITCODE -ne 0) { throw 'pack_sounds.py failed' }
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be major.minor.patch' }
+if ($Exe -eq '') { $Exe = Join-Path $src 'target\release\edscene.exe' }
+if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) { throw "Build eds-app first: $Exe" }
+if ($Iscc -eq '') {
+    $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($compiler) { $Iscc = $compiler.Source }
+    else { $Iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe' }
 }
-if ($Background -ne '') { Copy-Item $Background (Join-Path $pkg 'background.jpg') -Force }
+if (-not (Test-Path -LiteralPath $Iscc -PathType Leaf)) { throw 'Specify -Iscc with the path to Inno Setup 6 ISCC.exe' }
+if ($Assets -and -not (Test-Path -LiteralPath $Assets -PathType Container)) { throw "Missing assets: $Assets" }
+if ($Background -and -not (Test-Path -LiteralPath $Background -PathType Leaf)) { throw "Missing background: $Background" }
 
-# ---- the installer: the staged tree is appended to the setup binary itself
-if ($Setup -eq '') { $setupBase = Join-Path $src 'target\release\edscene-setup.exe' } else { $setupBase = $Setup }
-if (-not (Test-Path $setupBase)) { throw "先 cargo build --release -p eds-setup：找不到 $setupBase" }
-$installer = Join-Path $Out "edscene-setup-$Version-windows-x64.exe"
+New-Item -ItemType Directory -Force -Path $Out | Out-Null
+$Out = (Resolve-Path -LiteralPath $Out).Path
+$stage = Join-Path $Out ('pkg\inno-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
+try {
+    Copy-Item -LiteralPath $Exe -Destination (Join-Path $stage 'edscene.exe')
+    foreach ($file in 'README.md','README.en.md','CHANGELOG.md','LICENSE-code','LICENSE-content','NOTICE') {
+        Copy-Item -LiteralPath (Join-Path $src $file) -Destination $stage
+    }
+    Copy-Item -LiteralPath (Join-Path $src 'docs') -Destination $stage -Recurse
+    $code = Join-Path $Out "edscene-$Version-windows-x64.zip"
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $code -CompressionLevel Optimal -Force
 
-$code = Join-Path $Out "edscene-$Version-windows-x64.zip"
-$full = Join-Path $Out "edscene-setup-$Version-windows-x64.zip"
-Remove-Item $code, $full, $installer -Force -ErrorAction SilentlyContinue
-
-& $setupBase --pack $pkg $setupBase $installer | Out-Null
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installer)) { throw 'setup.exe pack failed' }
-"setup.exe  <- $((Get-Item $installer).Length) bytes, payload = $((Get-ChildItem -Recurse -File $pkg | Measure-Object).Count) files"
-Compress-Archive -Path (Join-Path $pkg 'edscene.exe'), (Join-Path $pkg 'docs'),
-    (Join-Path $pkg '*.md'), (Join-Path $pkg 'LICENSE-code'), (Join-Path $pkg 'LICENSE-content'),
-    (Join-Path $pkg 'NOTICE'), (Join-Path $pkg 'install.ps1'), (Join-Path $pkg 'setup.bat') `
-    -DestinationPath $code -CompressionLevel Optimal
-Compress-Archive -Path $installer, (Join-Path $pkg 'README.md'), (Join-Path $pkg 'README.en.md'),
-    (Join-Path $pkg 'docs') -DestinationPath $full -CompressionLevel Optimal
-
-$sums = @()
-foreach ($z in $code, $full, $installer) {
-    $h = (Get-FileHash $z -Algorithm SHA256).Hash.ToLower()
-    $sums += "$h *$(Split-Path $z -Leaf)"
-    "{0}  {1,9} bytes  {2}" -f $h, (Get-Item $z).Length, (Split-Path $z -Leaf)
+    if ($Assets) {
+        & python (Join-Path $PSScriptRoot 'pack_sounds.py') $Assets (Join-Path $stage 'sounds')
+        if ($LASTEXITCODE -ne 0) { throw 'Sound pack preparation failed' }
+    }
+    if ($Background) {
+        Copy-Item -LiteralPath $Background -Destination (Join-Path $stage 'background.jpg')
+    }
+    & $Iscc /Qp "/DStageDir=$stage" "/DReleaseDir=$Out" "/DAppVersion=$Version" (Join-Path $PSScriptRoot 'setup.iss')
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
+    $installer = Join-Path $Out "edscene-setup-$Version-windows-x64.exe"
+    if (-not (Test-Path -LiteralPath $installer)) { throw 'Installer output missing' }
+    $full = Join-Path $Out "edscene-setup-$Version-windows-x64.zip"
+    Compress-Archive -LiteralPath $installer, (Join-Path $PSScriptRoot 'installer-notice.txt') -DestinationPath $full -CompressionLevel Optimal -Force
+    $sums = foreach ($file in $code, $full, $installer) {
+        $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        Write-Host "$hash  $((Get-Item -LiteralPath $file).Length) bytes  $(Split-Path $file -Leaf)"
+        "$hash *$(Split-Path $file -Leaf)"
+    }
+    (($sums -join "`n") + "`n") | Set-Content -LiteralPath (Join-Path $Out "SHA256SUMS-$Version-windows.txt") -Encoding ascii -NoNewline
+} finally {
+    Remove-Item -LiteralPath $stage -Recurse -Force
 }
-$sums += "$( (Get-FileHash (Join-Path $pkg 'edscene.exe') -Algorithm SHA256).Hash.ToLower() ) *edscene.exe"
-(($sums -join "`n") + "`n") | Set-Content (Join-Path $Out 'SHA256SUMS.txt') -NoNewline -Encoding ascii
-"wrote $(Join-Path $Out 'SHA256SUMS.txt')"

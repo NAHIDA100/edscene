@@ -62,21 +62,21 @@ cargo build --release --workspace
 服务相关的命令需要管理员，建议直接开一个提升过的终端跑
 `target\release\edscene.exe --install-service`。
 
-## 出安装程序（setup.exe）
+## 出安装程序（中文向导 setup.exe）
 
 ```powershell
-cargo build --release                       # 顺带把 eds-setup 也编出来
+cargo build --release
 powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\pack.ps1 `
-  -Assets "D:\works\eds" -Background "C:/path/to/picture.jpg" -Out "D:\works\edscene-dist"
+  -Assets "D:\works\eds" -Background "C:\path	o\picture.jpg" -Out "D:\works\edscene-dist"
 ```
 
-`pack.ps1` 最后会调 `edscene-setup.exe --pack <暂存目录> <安装器> <setup.exe>`，
-把暂存目录整棵树追加到安装器尾部（页脚 `EDSPAY01`），所以素材永远只在二进制里，
-不进仓库。安装器自己约 680 KB，加上载荷约 20 MB。
+`pack.ps1` 把暂存树交给 Inno Setup（`packaging\windows\setup.iss`）编译，产物是
+`edscene-setup-<版本>-windows-x64.exe`。素材只在编译时进安装包，仓库里永远没有。
+需要本机装有 Inno Setup 6（默认找 PATH 里的 ISCC.exe，或用 `-Iscc` 指定路径）。
 
-想在不碰系统的前提下验一遍载荷：`setup.exe --silent --elevated --yes --dir <临时目录>`
-会在缺少管理员权限时直接退出（不会写到 Program Files，也不会弹第二次 UAC）；
-`cargo test -p eds-setup` 覆盖载荷的读写与路径穿越拒绝。
+停旧服务的逻辑在 `packaging\windows\service-control.ps1`：它只认"服务镜像路径等于
+本次安装目录"的那一份，按可执行文件路径逐个结束进程，不 `taskkill /IM` 全杀，也不会
+误伤构建目录里跑着的 exe。
 
 ## 交叉检查 Linux 代码
 

@@ -37,6 +37,7 @@ fn running_status() -> ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Running,
         controls_accepted: ServiceControlAccept::STOP
+            | ServiceControlAccept::SHUTDOWN
             | ServiceControlAccept::SESSION_CHANGE
             | ServiceControlAccept::POWER_EVENT,
         exit_code: ServiceExitCode::NO_ERROR,
@@ -46,12 +47,11 @@ fn running_status() -> ServiceStatus {
     }
 }
 
-/// What the SCM must see when the body gives up, so failure actions fire.
-fn stopped_status() -> ServiceStatus {
+fn stopped_status(failed: bool) -> ServiceStatus {
     ServiceStatus {
         current_state: ServiceState::Stopped,
         controls_accepted: ServiceControlAccept::empty(),
-        exit_code: ServiceExitCode::ServiceSpecific(1),
+        exit_code: if failed { ServiceExitCode::ServiceSpecific(1) } else { ServiceExitCode::NO_ERROR },
         ..running_status()
     }
 }
@@ -292,7 +292,7 @@ pub fn uninstall() -> Result<(), String> {
     let mgr = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
         .map_err(|e| e.to_string())?;
     let svc = mgr
-        .open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE)
+        .open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS)
         .map_err(|e| format!("没有安装服务：{e}"))?;
     let _ = svc.stop();
     for _ in 0..40 {
@@ -317,7 +317,7 @@ pub fn set_autostart(on: bool) -> Result<(), String> {
     let svc = mgr
         .open_service(SERVICE_NAME, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)
         .map_err(|e| e.to_string())?;
-    let mut info = service_info()?;
+    let mut info = installed_info(&mgr)?;
     info.start_type = if on {
         ServiceStartType::AutoStart
     } else {
@@ -407,9 +407,8 @@ fn body() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let r = supervise(&paths, sig_rx, &sig_tx, stop_rx);
-    // Clean exit or failure, the SCM has to be told either way — a service that
-    // dies quietly leaves a "RUNNING" zombie that no watchdog will restart.
-    let _ = handle.set_service_status(stopped_status());
+    // A deliberate stop must not be reported as a service failure.
+    let _ = handle.set_service_status(stopped_status(r.is_err()));
     r
 }
 
@@ -586,6 +585,8 @@ fn deliver(
     if let Signal::Logon { session } = sig {
         if !agents.contains(&session) {
             spawn_sidecars(server, session, cfg, paths, "logon");
+        } else if cfg.ui.tray {
+            spawn_tray(session, paths);
         }
     }
     let now = log::mono_ms();
@@ -662,13 +663,16 @@ fn spawn_sidecars(
         );
     }
     if cfg.ui.tray {
-        if let Err(e) = launch::spawn_tray_safe(session) {
-            log::write(
-                &paths.state_dir,
-                &serde_json::json!({"ev": "tray-fail", "session": session, "err": e}),
-            );
-        }
+        spawn_tray(session, paths);
     }
+}
+
+fn spawn_tray(session: u32, paths: &eds_core::Paths) {
+    let event = match launch::spawn_tray_safe(session) {
+        Ok(pid) => serde_json::json!({"ev": "tray-spawn", "session": session, "pid": pid}),
+        Err(e) => serde_json::json!({"ev": "tray-fail", "session": session, "err": e}),
+    };
+    log::write(&paths.state_dir, &event);
 }
 
 fn console_session() -> u32 {

@@ -3,9 +3,26 @@
 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.1.1] - 2026-10-13
 
 ### 新增
+
+- Windows 托盘改成自己实现的 Win32 通知区域图标：注册失败每 2 秒重试，并监听
+  `TaskbarCreated` 广播，Explorer 晚起或重启之后会自动补注册；成功/等待都写进用户日志
+  （`tray-ready` / `tray-wait`），不再是"进程活着但没人知道图标没上去"。
+- 设置窗口单实例：第二个实例唤醒已有的那个然后自己退出，托盘不会再越开越多。
+- 服务现在申报 `SERVICE_ACCEPT_SHUTDOWN`，关机时能收到 Shutdown 控制。
+
+### 变更
+
+- Windows 安装程序换成中文图形向导（Inno Setup，`packaging\windows\setup.iss`）：
+  欢迎 → 版权与素材说明 → 安装位置 → 附加任务（开机自启默认勾选）→ 确认 → 进度 → 完成，
+  支持 `/VERYSILENT /TASKS=`。原来那个要手打 `yes` 的控制台安装器（`eds-setup` crate）
+  连同 `install.ps1` / `setup.bat` 一起删掉，只留一条安装路径。
+- 升级/卸载只处理"服务镜像指向本安装目录"的那一份，按可执行文件路径逐个结束进程；
+  停不下来就中止安装并恢复原启动类型，不会把服务留在 disabled 状态。
+- 版本号 0.1.0 → 0.1.1。
+
 
 - `setup.exe`：单文件 Windows 安装程序（新 crate `crates/eds-setup`，约 680 KB）。
   程序本体、语音、背景图追加在安装器自己的文件尾部（`EDSPAY01` 载荷），双击 →

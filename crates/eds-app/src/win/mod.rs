@@ -13,6 +13,8 @@ pub mod dialogs;
 pub mod ipc;
 pub mod launch;
 pub mod service;
+pub mod settings_instance;
+pub mod tray;
 
 use crate::log;
 use crate::pipeline::{Broadcast, LocalBroadcast, NullBroadcast, Pipeline};
