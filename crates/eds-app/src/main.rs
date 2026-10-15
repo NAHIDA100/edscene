@@ -199,9 +199,11 @@ pub fn load_config(paths: &eds_core::Paths) -> Result<(Config, bool), String> {
         Ok(None) => (Config::factory(), true),
         Err(e) => return Err(e.to_string()),
     };
-    // A downloaded archive already contains its sound pack; adopt it instead of
-    // starting mute and making the user point at their own folder.
-    if cfg.sounds.dir.is_empty() {
+    // 随包的素材就在 exe 旁边，所以"默认素材目录"应该是安装目录里的 sounds\，
+    // 不是某个作者机器上的绝对路径。配置里那个目录不存在时（换机器、重装、盘符
+    // 变了）就改回随包的那一份，而不是从此不出声。
+    let points_nowhere = !cfg.sounds.dir.is_empty() && !PathBuf::from(&cfg.sounds.dir).is_dir();
+    if cfg.sounds.dir.is_empty() || points_nowhere {
         if let Some(dir) = paths::shipped_sounds() {
             cfg.sounds.dir = dir.display().to_string();
             let _ = cfg.save(&paths.config);

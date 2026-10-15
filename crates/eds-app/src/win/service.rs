@@ -684,9 +684,10 @@ fn load_at(paths: &eds_core::Paths) -> Config {
         .ok()
         .flatten()
         .unwrap_or_else(Config::factory);
-    // Nobody has opened the settings window yet on a fresh install, but the
-    // sound pack is already lying beside the exe: use it rather than sit mute.
-    if cfg.sounds.dir.is_empty() {
+    // 随包的 sounds\ 就在 exe 旁边。配置里那个目录不存在（换机器、重装、盘符变了）
+    // 时读时用这一份 —— 只改内存里的值，不回写配置：一个暂时离线的网络盘不该被
+    // 服务从 session 0 里覆盖掉。
+    if cfg.sounds.dir.is_empty() || !std::path::Path::new(&cfg.sounds.dir).is_dir() {
         if let Some(dir) = crate::paths::shipped_sounds() {
             cfg.sounds.dir = dir.display().to_string();
         }
