@@ -1,3 +1,8 @@
+// 这个二进制既是 GUI 也是 CLI。按控制台子系统编译的话，双击或从安装向导里"打开
+// 设置窗口"会额外开一个黑控制台，关掉它连设置窗口一起没（CTRL_CLOSE_EVENT）。
+// 所以声明成 GUI，启动时再挂靠父控制台 —— 从终端调用照样有输出。
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod backdrop;
 mod log;
 mod paths;
@@ -221,7 +226,21 @@ pub fn maybe_set_sounds_dir(inv: &Invocation, cfg: &mut Config, paths: &eds_core
     Ok(())
 }
 
+/// 从终端调用时把输出接回那个终端。双击、服务拉起的代理、开机自启的服务都没有
+/// 父控制台，这一步失败是正常情况 —— 不分配窗口，GUI 自己会说话。
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
+
 fn main() -> ExitCode {
+    attach_parent_console();
     let inv = match parse_args() {
         Ok(i) => i,
         Err(e) => {
