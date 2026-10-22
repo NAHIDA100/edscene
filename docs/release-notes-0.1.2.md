@@ -18,14 +18,14 @@ SHA-256 `5f8f620c…`）**是 0.1.1 改名而来的**，逐字节等于 0.1.1，
 
 | 文件 | 大小 | 给谁 |
 | --- | --- | --- |
-| `edscene-setup-0.1.2-windows-x64.exe` | 8 465 420 B | **普通用户下这个**：中文安装向导，语音与背景图都在包里 |
-| `edscene-setup-0.1.2-windows-x64.zip` | 7 906 166 B | 同一个安装程序 + 说明与文档 |
-| `edscene-0.1.2-windows-x64.zip` | 8 005 376 B | 便携版：只有程序与文档，**不含语音**，需自己指向素材目录 |
+| `edscene-setup-0.1.2-windows-x64.exe` | 8 465 728 B | **普通用户下这个**：中文安装向导，语音与背景图都在包里 |
+| `edscene-setup-0.1.2-windows-x64.zip` | 7 906 473 B | 同一个安装程序 + 说明与文档 |
+| `edscene-0.1.2-windows-x64.zip` | 8 010 009 B | 便携版：只有程序与文档，**不含语音**，需自己指向素材目录 |
 | `SHA256SUMS.txt` | — | 上面三个的校验和 |
 
 ```
 Get-FileHash .\edscene-setup-0.1.2-windows-x64.exe -Algorithm SHA256
-# 25b66284505c1d1a01695209d959f57e11ba20f0d4c6446101aa191b1cbfc1f4
+# 6fd18c011602b96311528c611fd8a03ef5915a3dc1394f377815a8de0d57049b
 ```
 
 ## 这一版修了什么
@@ -50,7 +50,7 @@ Get-FileHash .\edscene-setup-0.1.2-windows-x64.exe -Algorithm SHA256
 1. `C:\ProgramData\edscene\service-install.log` —— 最后一次的失败原因就在最后一行。
 2. `C:\ProgramData\edscene\state\events.ndjson` —— 有没有 `service-exit`，它的 `err` 是什么。
 3. `sc.exe query edscene-broadcast` 的状态，以及 `Get-Item 'C:\Program Files\edscene\edscene.exe'`
-   的大小（本版本应为 18 888 957 B，确认新版真的覆盖上了）。
+   的大小（本版本应为 18 889 573 B，确认新版真的覆盖上了）。
 
 把这三样发出来就能定位，不需要重装。
 
@@ -97,8 +97,14 @@ cmd /c "edscene --config-path"       # 配置与日志在哪
 - 「屏保恢复」是启发式判据，因此出厂关闭。
 - Linux 登录界面（greeter）阶段能否出声取决于发行版的音频套接字策略，不承诺通用。
 - 无边框模式下没有系统级贴边吸附与双击最大化；需要那套就用默认的系统标题栏。
-- 本版的自启修复在作者机器上实测过成功路径与"未提权失败"路径；**别人机器上那次
-  「退出码 1」的确切原因仍待那份 `service-install.log` 回来** —— 这一版的作用正是让它可见。
+- 本版的自启日志与提权轮询，在作者机器上实测的是**未提权失败**那条路径（日志确实落了
+  盘、时间戳与中文正常、原因完整）；**注册成功**那条要等一次真实的 UAC 确认才能走完，
+  装的时候如果向导没报错、`sc.exe query edscene-broadcast` 是 RUNNING，就说明也通了。
+- 别人机器上那次「退出码 1」的确切原因仍待那份 `service-install.log` 回来 —— 这一版的
+  全部意义就是让它可见。
+- CI 的 `windows-msvc` 与 `linux` 两条测试作业从建仓起就一直红（Linux 那条已定位成缺
+  `-dev` 头文件并修了；msvc 那条还没日志）。所以下面说的"CI 产出 Linux 包"目前还不可靠，
+  需要 `.deb` 的先找作者拿本地构建。
 
 ## 版权与素材
 

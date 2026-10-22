@@ -382,6 +382,23 @@ fn log_attempt(verb: &str, r: &Result<(), String>) {
             let _ = f.write_all("\u{feff}".as_bytes());
         }
         let _ = f.write_all(line.as_bytes());
+        return;
+    }
+    // ProgramData 里那份可能是管理员先前创建的，普通用户追加不进去；宁可写到
+    // 自己目录里，也不能让这一次尝试连一行记录都不剩。
+    let alt = paths::user_paths().state_dir.join("service-install.log");
+    if alt == p {
+        return;
+    }
+    if let Some(d) = alt.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let new = !alt.exists();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&alt) {
+        if new {
+            let _ = f.write_all("\u{feff}".as_bytes());
+        }
+        let _ = f.write_all(line.as_bytes());
     }
 }
 
