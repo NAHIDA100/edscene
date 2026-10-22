@@ -40,6 +40,8 @@ const HELP: &str = r#"集成工业播报终端 edscene
   --uninstall-service   停止并移除服务
   --autostart-on / --autostart-off
                         开 / 关开机自启（Windows 改服务启动类型，Linux 写用户单元）
+  以上三步无论成功失败，都会把原因记进
+                        %PROGRAMDATA%\edscene\service-install.log（安装向导也指向它）
   --factory-reset       所有设置回到出厂状态，替换过的素材退回 .disabled
   --config-path         打印配置与素材目录
   --service-status      Windows：查看开机自启服务的状态

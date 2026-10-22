@@ -114,6 +114,21 @@ fn installed_info(mgr: &ServiceManager) -> Result<ServiceInfo, String> {
     Ok(info)
 }
 
+/// What `--install-service` registers: the executable that is running this very
+/// command.
+///
+/// Keeping the old image is wrong here — that is how a machine that once ran a
+/// zip from 下载 keeps booting that zip after an install into Program Files.
+/// Only a build directory is unsafe to boot from, and then the conservative
+/// fallback applies.
+fn install_info(mgr: &ServiceManager) -> Result<ServiceInfo, String> {
+    let info = service_info()?;
+    if !in_build_dir(&info.executable_path) {
+        return Ok(info);
+    }
+    installed_info(mgr)
+}
+
 /// True for `…\target\release\edscene.exe` and friends.
 fn in_build_dir(p: &Path) -> bool {
     p.ancestors()
@@ -146,6 +161,12 @@ fn state_name(s: ServiceState) -> &'static str {
 /// Register (or repair) the service and start it. Needs elevation; without it
 /// this re-launches itself through UAC so the user only has to click Yes.
 pub fn install() -> Result<(), String> {
+    let r = install_inner();
+    log_attempt("--install-service", &r);
+    r
+}
+
+fn install_inner() -> Result<(), String> {
     if !is_admin() {
         return match elevate("--install-service") {
             Ok(()) => {
@@ -160,7 +181,7 @@ pub fn install() -> Result<(), String> {
         ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
     )
     .map_err(|e| e.to_string())?;
-    let info = installed_info(&mgr)?;
+    let info = install_info(&mgr)?;
     let svc = match mgr.create_service(&info, ServiceAccess::ALL_ACCESS) {
         Ok(s) => s,
         Err(e) => {
@@ -217,16 +238,21 @@ pub fn install() -> Result<(), String> {
             .map(|s| s.current_state)
             .map_err(|e| werr(e))?;
         if state != ServiceState::Running {
-            return Err(format!(
+            let dir = machine_state_dir();
+            let mut msg = format!(
                 "服务启动后立刻退出了（{}/{}），原因记录在 {}，改好后重跑本命令",
                 state_name(state),
                 SERVICE_NAME,
-                // Where the service itself writes, not where a plain UI run would.
-                paths::machine_paths()
-                    .unwrap_or_else(paths::active_paths)
-                    .state_dir
-                    .display()
-            ));
+                dir.display()
+            );
+            // The service runs in session 0 and dies without printing anywhere
+            // an installer could see, but it does write its own reason. Quote it
+            // here so "exit code 1" never has to be the whole story.
+            if let Some(last) = last_service_error(&dir) {
+                msg.push_str("\n服务自己留下的最后一条记录：");
+                msg.push_str(&last);
+            }
+            return Err(msg);
         }
     }
     println!(
@@ -285,7 +311,87 @@ fn describe_and_harden(svc: &windows_service::service::Service) -> Result<(), St
     }
 }
 
+/// Where the *service* writes, whether or not that directory existed before:
+/// `machine_paths()` is only a probe, so on a fresh machine it answers "nothing
+/// here" a moment before the service creates it.
+fn machine_state_dir() -> std::path::PathBuf {
+    paths::ensure_machine_paths()
+        .map(|p| p.state_dir)
+        .unwrap_or_else(|| paths::active_paths().state_dir)
+}
+
+/// The last thing the service itself managed to record, if it recorded anything.
+fn last_service_error(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(log::file(dir)).ok()?;
+    text.lines()
+        .rev()
+        .find(|l| l.contains("\"err\""))
+        .map(|l| l.trim().to_string())
+}
+
+/// Every service verb also writes here, one human line per attempt.
+///
+/// The installer runs the child hidden and the UAC-elevated child is a GUI
+/// subsystem process, so stdout has nowhere to go on both paths: without this
+/// file the only thing anybody ever sees is "退出码 1". It sits beside the
+/// config, not in it, so a normal user can read it but never corrupt it.
+pub fn install_log_path() -> std::path::PathBuf {
+    let dir = paths::ensure_machine_paths()
+        .and_then(|p| p.state_dir.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| paths::user_paths().state_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("service-install.log")
+}
+
+fn stamp() -> String {
+    use windows::Win32::System::SystemInformation::GetLocalTime;
+    let t = unsafe { GetLocalTime() };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
+    )
+}
+
+fn log_attempt(verb: &str, r: &Result<(), String>) {
+    use std::io::Write;
+    let p = install_log_path();
+    let new = !p.exists();
+    let exe = std::env::current_exe()
+        .map(|e| e.display().to_string())
+        .unwrap_or_else(|_| "未知".into());
+    let line = match r {
+        Ok(()) => format!(
+            "[{}] {verb} 返回成功（服务名 {SERVICE_NAME}，本次运行的 exe：{exe}，{}）\n",
+            stamp(),
+            if is_admin() {
+                "本进程已提权"
+            } else {
+                "本进程未提权，已交给 UAC 子进程，真正的结果在下面几行"
+            }
+        ),
+        Err(e) => format!(
+            "[{}] {verb} 失败（本次运行的 exe：{exe}）：{}\n",
+            stamp(),
+            e.replace('\n', "\n    ")
+        ),
+    };
+    let opened = std::fs::OpenOptions::new().create(true).append(true).open(&p);
+    if let Ok(mut f) = opened {
+        if new {
+            // Notepad needs the BOM to show Chinese at all.
+            let _ = f.write_all("\u{feff}".as_bytes());
+        }
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 pub fn uninstall() -> Result<(), String> {
+    let r = uninstall_inner();
+    log_attempt("--uninstall-service", &r);
+    r
+}
+
+fn uninstall_inner() -> Result<(), String> {
     if !is_admin() {
         return Err("需要管理员权限：请以管理员身份运行 edscene --uninstall-service".into());
     }
@@ -309,6 +415,12 @@ pub fn uninstall() -> Result<(), String> {
 /// Flip the service between automatic and manual start; this is what the UI's
 /// 开机自启 switch does, so there is exactly one source of truth.
 pub fn set_autostart(on: bool) -> Result<(), String> {
+    let r = set_autostart_inner(on);
+    log_attempt(if on { "--autostart-on" } else { "--autostart-off" }, &r);
+    r
+}
+
+fn set_autostart_inner(on: bool) -> Result<(), String> {
     if !is_admin() {
         return Err("修改开机自启需要管理员权限".into());
     }

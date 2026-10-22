@@ -41,6 +41,18 @@ pub fn elevate_for_autostart() -> Result<(), String> {
     crate::win::service::elevate("--install-service")
 }
 
+/// Where to look when an autostart change comes back without a reason: both the
+/// installer and the UAC child have no console this output could live in.
+#[cfg(windows)]
+pub fn autostart_log_hint() -> String {
+    crate::win::service::install_log_path().display().to_string()
+}
+
+#[cfg(not(windows))]
+pub fn autostart_log_hint() -> String {
+    "journalctl --user -u edscene".into()
+}
+
 #[cfg(windows)]
 pub fn blurred_wallpaper() -> Option<slint::Image> {
     crate::win::dialogs::blurred_wallpaper()

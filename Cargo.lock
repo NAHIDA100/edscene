@@ -1082,7 +1082,7 @@ checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "eds-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "eds-core",
  "eds-linux",
@@ -1101,7 +1101,7 @@ dependencies = [
 
 [[package]]
 name = "eds-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "eds-linux"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "eds-core",
  "zbus",

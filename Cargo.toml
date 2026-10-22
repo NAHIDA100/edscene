@@ -4,7 +4,7 @@ members = ["crates/eds-core", "crates/eds-linux", "crates/eds-app"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT AND CC-BY-NC-ND-4.0"

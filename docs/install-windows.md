@@ -26,14 +26,19 @@
    桌面快捷方式默认不勾，想要再勾。
 3. 升级时它会先安全停掉**安装目录那一份**服务与残留进程（只按可执行文件路径匹配，
    不会 `taskkill /IM` 全杀），再覆盖文件、重新注册并启动服务。
-4. 你的设置（`%PROGRAMDATA%\edscene\config.toml`）与替换过的音频**不会被删**；
+4. 服务镜像固定指向**这次运行的那个 exe**（`C:\Program Files\edscene\edscene.exe`）。
+   以前它可能留着别的副本 —— 比如你曾从「下载」里解压跑过一次，开机自启就会一直
+   启动那个旧文件，表现就是"装了新的还是没效果"。
+5. 自启没装上时，向导不再只丢一句「退出码 1」：真正的原因写在
+   `%PROGRAMDATA%\edscene\service-install.log`，向导会把路径给你并问要不要用记事本打开。
+6. 你的设置（`%PROGRAMDATA%\edscene\config.toml`）与替换过的音频**不会被删**；
    卸载走 Windows「设置 → 应用」，同样保留这两样。
 
 命令行也能用（无人值守）：
 
 ```powershell
-.\edscene-setup-0.1.1-windows-x64.exe /VERYSILENT /NORESTART /TASKS=autostart
-.\edscene-setup-0.1.1-windows-x64.exe /VERYSILENT /NORESTART /TASKS=   # 不开自启
+.\edscene-setup-0.1.2-windows-x64.exe /VERYSILENT /NORESTART /TASKS=autostart
+.\edscene-setup-0.1.2-windows-x64.exe /VERYSILENT /NORESTART /TASKS=   # 不开自启
 ```
 
 ## 托盘图标
@@ -77,6 +82,16 @@ notepad $env:LOCALAPPDATA\edscene\events.ndjson   # 找 tray-ready / tray-wait
    edscene --simulate unlock,ac_lost
    ```
 
+   在 PowerShell 里直接调用是看不到输出的 —— 程序按 GUI 子系统编译（所以双击不会
+   带出黑色控制台），而 PowerShell 对 GUI 程序默认不等待、也不接管道。用 cmd，或者
+   让 PowerShell 等它并把输出重定向到文件：
+
+   ```powershell
+   cmd /c "edscene --selftest --json"
+   Start-Process -FilePath .\edscene.exe -ArgumentList '--version' -NoNewWindow -Wait -RedirectStandardOutput out.txt
+   Get-Content out.txt
+   ```
+
 ## 开机自启（推荐，需要管理员）
 
 ```powershell
@@ -87,7 +102,12 @@ edscene --install-service
 
 - 注册服务 `edscene-broadcast`，显示名"集成工业播报终端"，LocalSystem，自动启动；
 - 崩溃后 5s / 30s / 60s 自动重启；
-- 立刻启动一次。
+- 立刻启动一次，并且**回查它是不是还活着**：服务在会话 0 里崩了是不会有任何弹窗的，
+  所以这一步会把 `events.ndjson` 里服务自己写的最后一条错误一起报出来；
+- 服务镜像指向执行这条命令的那个 exe（在 `target\` 里跑的除外）。
+
+成功与失败都会在同一时间写一行到 `%PROGRAMDATA%\edscene\service-install.log`：
+安装向导把子进程藏起来了，UAC 提权出来的子进程又没有控制台，这行日志是唯一的现场记录。
 
 之后每次开机：服务在**登录界面出现之前**就已加载；你一输完密码，
 服务用你的会话令牌把代理进程拉进桌面（`winsta0\Default`），
@@ -152,6 +172,7 @@ Copy-Item D:\works\edscene\target\release\edscene.exe 'C:\Program Files\edscene\
 %PROGRAMDATA%\edscene\sounds\        你"替换"过的音频
 %PROGRAMDATA%\edscene\sounds\.disabled\  退回预设时被移走的旧替换文件（不会删）
 %PROGRAMDATA%\edscene\state\events.ndjson 服务日志：事件判定、下发、代理上线
+%PROGRAMDATA%\edscene\service-install.log 注册/开关自启的每一次结果，失败原因在这里
 %LOCALAPPDATA%\edscene\events.ndjson  你自己这一份：界面与代理的播放记录
 ```
 
@@ -172,6 +193,8 @@ Copy-Item D:\works\edscene\target\release\edscene.exe 'C:\Program Files\edscene\
 | 只播一次就不播了 | 看 `events.ndjson` 里有没有 `skipped / busy`；`--simulate` 会告诉你输出流有没有被释放 |
 | 锁屏没声音 | 出厂默认"锁屏"是关的：`edscene --enable lock` |
 | 服务起不来 | `sc.exe query edscene-broadcast`，再看 `%PROGRAMDATA%\edscene\state\events.ndjson` |
+| 向导弹「开机自启服务注册失败（退出码 1）」 | 文件已经装好，只有自启没装上。向导给的日志路径里有真正的原因（`%PROGRAMDATA%\edscene\service-install.log`），把最后两行发出来即可定位；同时看 `state\events.ndjson` 里有没有 `service-exit` |
+| 点了「以管理员身份开启」没反应 | UAC 之后的子进程没有控制台，成功失败都不弹窗。现在窗口会自己轮询服务：装上了开关自动变绿，没装上会把日志路径写在提示条里 |
 | 装完没声音但服务显示 RUNNING | 老版本假死；按上面"换了新版 exe 之后"重启一次。新版会在安装结束时确认服务还活着，并在失败时打印 `os error` 编号 |
 | 想彻底重来 | `edscene --factory-reset`（只动配置和替换文件，不碰你的素材目录） |
 

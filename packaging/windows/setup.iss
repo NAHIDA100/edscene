@@ -1,6 +1,6 @@
 ﻿; edscene Windows 安装向导（Inno Setup 6）
 ; 由 packaging/windows/pack.ps1 调用：
-;   ISCC /DStageDir=<暂存目录> /DReleaseDir=<输出目录> /DAppVersion=0.1.1 setup.iss
+;   ISCC /DStageDir=<暂存目录> /DReleaseDir=<输出目录> /DAppVersion=0.1.2 setup.iss
 ; 暂存目录里有 edscene.exe、sounds\、background.jpg、README/许可/NOTICE 与 docs。
 ; 素材不在仓库里，所以这一步只在本地跑。
 ; 三个符号都由命令行 /D 传入；脚本里再 #define 一次会把传进来的值清空。
@@ -90,6 +90,32 @@ begin
   end;
 end;
 
+function ServiceLogFile: String;
+begin
+  Result := ExpandConstant('{commonappdata}\edscene\service-install.log');
+end;
+
+// 子进程是 GUI 子系统，向导又是隐藏窗口跑的它，所以退出码背后那句真正的报错
+// 谁都不会看见。程序自己把这行写进日志，这里只负责把日志递到用户手上。
+procedure ExplainServiceFailure(const What: String; Code: Integer);
+var
+  Answer, Dummy: Integer;
+  Text: String;
+begin
+  Text := '程序文件已经装好，但这一步没完成：' + What + '（退出码 ' + IntToStr(Code) + '）。' + #13#10#13#10;
+  if FileExists(ServiceLogFile) then
+    Text := Text + '失败的原因只有程序自己写得出来，它已经记在这一行里：' + #13#10 +
+      ServiceLogFile + #13#10#13#10 +
+      '现在用记事本打开它吗？把最后几行发给开发者就能定位问题。' + #13#10 +
+      '也可以先在管理员命令行里执行 edscene --install-service 重试。'
+  else
+    Text := Text + '诊断日志还没生成（预期位置 ' + ServiceLogFile + '）。' + #13#10 +
+      '请在管理员命令行里执行 edscene --install-service，把它的输出发出来。';
+  Answer := MsgBox(Text, mbError, MB_YESNO);
+  if FileExists(ServiceLogFile) and (Answer = IDYES) then
+    Exec('notepad.exe', '"' + ServiceLogFile + '"', '', SW_SHOW, ewNoWait, Dummy);
+end;
+
 procedure RegisterService;
 var
   Code: Integer;
@@ -98,14 +124,17 @@ begin
       SW_HIDE, ewWaitUntilTerminated, Code) then Code := 1;
   if Code <> 0 then
   begin
-    MsgBox('程序文件已装好，但开机自启服务注册失败（退出码 ' + IntToStr(Code) +
-      '）。可以在管理员命令行里执行 edscene --install-service 重试。', mbError, MB_OK);
+    ExplainServiceFailure('注册开机自启服务', Code);
     Exit;
   end;
   InstalledOk := True;
   if not WizardIsTaskSelected('autostart') then
-    Exec(ExpandConstant('{app}\edscene.exe'), '--autostart-off', '',
-      SW_HIDE, ewWaitUntilTerminated, Code);
+  begin
+    if not Exec(ExpandConstant('{app}\edscene.exe'), '--autostart-off', '',
+        SW_HIDE, ewWaitUntilTerminated, Code) then Code := 1;
+    if Code <> 0 then
+      ExplainServiceFailure('按你的选择关掉开机自启', Code);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

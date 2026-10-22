@@ -50,6 +50,9 @@ struct State {
     reset_armed: Cell<bool>,
     blur_timer: RefCell<Option<Timer>>,
     status_timer: RefCell<Option<Timer>>,
+    /// Polls the SCM after a UAC hand-off, because the elevated child has no
+    /// console this window could read.
+    elev_timer: Rc<RefCell<Option<Timer>>>,
     grab: RefCell<Option<crate::platform::drag::Grab>>,
     /// Kept so one flipped switch can redraw one row instead of the whole table.
     rows: RefCell<Option<Rc<VecModel<EventRow>>>>,
@@ -98,6 +101,7 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
         reset_armed: Cell::new(false),
         blur_timer: RefCell::new(None),
         status_timer: RefCell::new(None),
+        elev_timer: Rc::new(RefCell::new(None)),
         grab: RefCell::new(None),
         rows: RefCell::new(None),
     });
@@ -343,7 +347,10 @@ pub fn show(cfg: Config, paths: Paths, hidden: bool) -> Result<(), String> {
     win.on_elevate(move || {
         let Some(win) = w.upgrade() else { return };
         match crate::platform::elevate_for_autostart() {
-            Ok(()) => s.status(&win, "已请求管理员权限，请在弹窗里点「是」".into(), false),
+            Ok(()) => {
+                s.status(&win, "已请求管理员权限，请在弹窗里点「是」，之后这里会自己变成已注册".into(), false);
+                watch_service(&s, &win);
+            }
             Err(e) => s.status(&win, format!("！{e}"), true),
         }
     });
@@ -655,6 +662,38 @@ impl State {
             }
         }
     }
+}
+
+/// The UAC child is a GUI-subsystem process: whatever it printed, nobody could
+/// read it, and whether the service landed stayed invisible. Poll the SCM and
+/// say so in the same banner once it changes.
+fn watch_service(st: &Rc<State>, win: &MainWindow) {
+    let left = Rc::new(Cell::new(45_u32));
+    let t = Timer::default();
+    let weak = win.as_weak();
+    let (me, left2, hint) = (st.clone(), left.clone(), crate::platform::autostart_log_hint());
+    let holder = me.elev_timer.clone();
+    let _ = t.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+        let Some(win) = weak.upgrade() else { return };
+        let done = crate::platform::service_installed();
+        let timed_out = !done && left2.get() <= 1;
+        if done || timed_out {
+            if let Some(t) = holder.borrow().as_ref() {
+                t.stop();
+            }
+        }
+        if done {
+            win.set_service_ready(true);
+            win.set_need_admin(false);
+            me.cfg.borrow_mut().runtime.autostart = true;
+            me.commit(&win, "服务已注册，开机自启已打开".into());
+        } else if timed_out {
+            me.status(&win, format!("！提权进程没能把服务装上。原因写在 {hint}"), true);
+        } else {
+            left2.set(left2.get() - 1);
+        }
+    });
+    *st.elev_timer.borrow_mut() = Some(t);
 }
 
 /// Just the last path component, for the 背景图片 row.
